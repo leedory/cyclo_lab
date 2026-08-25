@@ -276,6 +276,28 @@ python scripts/sim2real/bringup.py \
     --camera_view operator
 ```
 
+Record Task 000458 (pick up the Peanut Mix with the right gripper) seed
+demonstrations in the showroom. The task records the three policy cameras,
+19 SG2 joint targets, both EEF poses, and simulator state directly to HDF5 at
+15 Hz. Use `B` to start, `N` to save a successful episode, and `R` to discard
+and reset. Add `--camera_view operator` to show the six-camera operator
+dashboard; the dashboard is for teleoperation and is not written as an extra
+HDF5 observation. Seed task parameters such as task id, target object, policy cameras,
+and showroom USD are defined in
+`source/cyclo_lab/cyclo_lab/manager_based/manipulation/showroom/config/ffw_sg2/seed_task_specs.py`;
+add a new spec and gym registration for the next seed task.
+
+```bash
+python scripts/sim2real/imitation_learning/recorder/record_demos.py \
+    --task=Cyclo-Real-Showroom-Pick-Peanut-FFW-SG2-v0 \
+    --robot_type FFW_SG2 \
+    --dataset_file ./datasets/task_000458_showroom_seed_raw.hdf5 \
+    --num_demos 6 \
+    --step_hz 15 \
+    --enable_cameras \
+    --camera_view operator
+```
+
 Launch FFW SG2 in the IsaacLab-Arena Galileo pick-and-place environment
 
 ```bash

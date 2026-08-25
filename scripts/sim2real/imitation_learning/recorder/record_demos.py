@@ -48,6 +48,12 @@ parser.add_argument("--dataset_file", type=str, default="./datasets/dataset.hdf5
 parser.add_argument("--num_demos", type=int, default=0, help="Number of demonstrations to record. Set to 0 for infinite.")
 parser.add_argument("--flush_steps", type=int, default=30, help="Streaming HDF5 flush interval in environment steps.")
 parser.add_argument(
+    "--camera_view",
+    default="none",
+    choices=("none", "operator"),
+    help="Optional local operator camera dashboard while recording.",
+)
+parser.add_argument(
     "--publish_camera_topics",
     action="store_true",
     help="Publish compressed camera topics while recording. HDF5 camera recording does not require this.",
@@ -78,6 +84,8 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
+if args_cli.camera_view == "operator":
+    args_cli.enable_cameras = True
 
 app_launcher_args = vars(args_cli)
 
@@ -263,6 +271,40 @@ def release_camera_sensors_before_close(env) -> None:
             registry.clear()
 
 
+def enable_operator_camera_view(env_cfg) -> None:
+    """Enable the task's operator dashboard cameras before environment creation."""
+    enable_operator_cameras = getattr(env_cfg, "enable_operator_preview_cameras", None)
+    if enable_operator_cameras is not None:
+        enable_operator_cameras()
+    if not getattr(env_cfg, "operator_camera_rows", None):
+        raise ValueError(f"Task {args_cli.task} does not support --camera_view operator.")
+
+
+def make_operator_view(env_cfg, env):
+    """Create the same multi-camera dashboard used by sim2real bringup."""
+    if args_cli.camera_view != "operator":
+        return None
+
+    from cyclo_lab.runtime.viewers import CameraDashboard
+
+    rows = getattr(env_cfg, "operator_camera_rows")
+    camera_names = {camera_name for row in rows for camera_name, _label in row}
+    missing_cameras = sorted(camera_names.difference(env.scene.sensors))
+    if missing_cameras:
+        raise ValueError(f"Operator dashboard sensors are unavailable: {missing_cameras}")
+
+    dashboard = CameraDashboard(
+        env,
+        rows=rows,
+        panel_rotations=dict(getattr(env_cfg, "operator_camera_rotations", ())),
+        window_title=getattr(env_cfg, "operator_camera_title", "Camera Dashboard"),
+        window_size=getattr(env_cfg, "operator_camera_window_size", 1800),
+        window_position=(20, 20),
+    )
+    print(f"[Camera Preview] operator dashboard: {dashboard.width}x{dashboard.height}")
+    return dashboard
+
+
 def main():
     """Running cyclo_lab teleoperation with cyclo_lab manipulation environment."""
 
@@ -277,6 +319,8 @@ def main():
     env_cfg.init_action_cfg("record")
     env_cfg.seed = args_cli.seed
     task_name = args_cli.task
+    if args_cli.camera_view == "operator":
+        enable_operator_camera_view(env_cfg)
 
     # modify configuration
     if hasattr(env_cfg.terminations, "time_out"):
@@ -371,6 +415,7 @@ def main():
     # reset environment
     env.reset()
     teleop_interface.reset()
+    operator_view = make_operator_view(env_cfg, env)
 
     current_recorded_demo_count = 0
 
@@ -459,6 +504,9 @@ def main():
                             # This is a reset action, don't step the environment
                             with profiler.time("env_render_reset_action"):
                                 env.render()
+                            if operator_view is not None:
+                                with profiler.time("operator_camera_view"):
+                                    operator_view.update()
                             continue
                     else:
                         # Handle tensor actions
@@ -466,12 +514,17 @@ def main():
                             actions = actions.unsqueeze(0)
                         with profiler.time("env_step"):
                             env.step(actions)
+                if operator_view is not None:
+                    with profiler.time("operator_camera_view"):
+                        operator_view.update()
                 if rate_limiter:
                     with profiler.time("rate_sleep"):
                         rate_limiter.sleep()
         profiler.tick()
 
     # close the simulator
+    if operator_view is not None:
+        operator_view.close()
     teleop_interface.shutdown()
     profiler.remove_hooks()
     release_camera_sensors_before_close(env)
