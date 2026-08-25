@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from copy import deepcopy
 
 from isaaclab.assets.articulation import ArticulationCfg
@@ -29,12 +28,12 @@ from .mdp import ffw_sg2_showroom_events
 from .showroom_env_cfg import ShowroomEnvCfg
 
 
-SG2_SHOWROOM_ROBOT_POS = (-1.116, 1.681, 0.0)
+SG2_SHOWROOM_ROBOT_POS = (-1.316, 1.681, 0.0)
 SG2_SHOWROOM_ROBOT_ROT = (0.0, 0.0, 0.0, 1.0)
 SG2_SHOWROOM_HEAD_CAMERA_WIDTH = 640
 SG2_SHOWROOM_HEAD_CAMERA_HEIGHT = 480
-SG2_SHOWROOM_ROOT_POSITION_RANDOMIZATION_RADIUS = 0.1
-SG2_SHOWROOM_ROOT_YAW_RANDOMIZATION = math.radians(10.0)
+SG2_SHOWROOM_ROOT_POSITION_RANDOMIZATION_RADIUS = 0.0
+SG2_SHOWROOM_ROOT_YAW_RANDOMIZATION = 0.0
 SG2_SHOWROOM_WALL_BACKGROUND_ZOOM_RANGE = (1.0, 1.3)
 SG2_SHOWROOM_INITIAL_JOINT_POSITIONS = {
     "arm_l_joint1": 0.0005,

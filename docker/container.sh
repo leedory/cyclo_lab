@@ -91,13 +91,30 @@ setup_x11() {
         return 1
     fi
 
-    # Create temporary directory for xauth
-    export __CYCLOLAB_TMP_DIR=$(mktemp -d)
+    # Use a stable runtime path so an existing container keeps a valid bind
+    # mount when it is started again after a host reboot.
+    local cyclolab_xauth_runtime_dir="${XDG_RUNTIME_DIR:-/tmp}"
+    export __CYCLOLAB_TMP_DIR="${cyclolab_xauth_runtime_dir}/cyclo-lab-xauth-$(id -u)"
     export __CYCLOLAB_TMP_XAUTH="${__CYCLOLAB_TMP_DIR}/.xauth"
 
     # Create xauth file
-    touch "${__CYCLOLAB_TMP_XAUTH}"
+    mkdir -p "${__CYCLOLAB_TMP_DIR}"
+    chmod 700 "${__CYCLOLAB_TMP_DIR}"
+    : > "${__CYCLOLAB_TMP_XAUTH}"
+    chmod 600 "${__CYCLOLAB_TMP_XAUTH}"
     xauth nlist "$DISPLAY" | sed -e 's/^..../ffff/' | xauth -f "${__CYCLOLAB_TMP_XAUTH}" nmerge -
+
+    # Some GDM sessions store the cookie with an empty display number. Add an
+    # explicit entry for DISPLAY so clients in the container send the cookie.
+    local cyclolab_xauth_cookie
+    cyclolab_xauth_cookie="$(xauth list "$DISPLAY" | awk 'NR == 1 { print $3 }')"
+    if [ -n "${cyclolab_xauth_cookie}" ]; then
+        xauth -f "${__CYCLOLAB_TMP_XAUTH}" add \
+            "$DISPLAY" MIT-MAGIC-COOKIE-1 "${cyclolab_xauth_cookie}"
+        xauth -f "${__CYCLOLAB_TMP_XAUTH}" nlist "$DISPLAY" \
+            | sed -e 's/^..../ffff/' \
+            | xauth -f "${__CYCLOLAB_TMP_XAUTH}" nmerge -
+    fi
     
     echo "[INFO] X11 forwarding configured"
     echo "[INFO] XAUTH file: ${__CYCLOLAB_TMP_XAUTH}"
@@ -185,8 +202,13 @@ enter_container() {
         exit 1
     fi
 
-    # Pass DISPLAY environment variable to the container
-    docker exec -it -e DISPLAY="${DISPLAY}" cyclo_lab${DOCKER_NAME_SUFFIX} /bin/bash
+    # Preserve the DISPLAY stored on the container when the calling shell does
+    # not have one. Passing an empty value here disables X11 inside the shell.
+    local -a cyclolab_exec_args=(-it)
+    if [ -n "${DISPLAY:-}" ]; then
+        cyclolab_exec_args+=(-e DISPLAY="${DISPLAY}")
+    fi
+    docker exec "${cyclolab_exec_args[@]}" cyclo_lab${DOCKER_NAME_SUFFIX} /bin/bash
 }
 
 # Stop container
