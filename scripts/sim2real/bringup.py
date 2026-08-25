@@ -34,12 +34,6 @@ parser.add_argument(
         "Robot-specific calibration profile name or YAML path for tasks that support profiles (default: 1050)."
     ),
 )
-parser.add_argument(
-    "--joint-response-profile",
-    default="ideal",
-    choices=("ideal", "measured", "measured-randomized"),
-    help="Optional SG2 arm/gripper response model; ideal preserves the stock simulator behavior.",
-)
 parser.add_argument("--num_steps", type=int, default=0, help="Stop after this many steps; 0 runs indefinitely.")
 parser.add_argument("--max_runtime", type=float, default=0.0, help="Stop after this many seconds; 0 runs indefinitely.")
 parser.add_argument("--report_interval", type=int, default=120, help="Steps between control-rate reports; 0 disables.")
@@ -140,18 +134,6 @@ def _configure_environment():
         print(
             f"[Robot Profile] name={env_cfg.robot_profile} id={env_cfg.robot_profile_id} "
             f"sha256={env_cfg.robot_profile_sha256}"
-        )
-
-    apply_joint_response_profile = getattr(env_cfg, "apply_joint_response_profile", None)
-    if args_cli.joint_response_profile != "ideal":
-        if apply_joint_response_profile is None:
-            raise ValueError(f"Task {args_cli.task} does not support joint response profiles.")
-        apply_joint_response_profile(args_cli.joint_response_profile)
-    if apply_joint_response_profile is not None:
-        print(
-            f"[Joint Response] name={env_cfg.joint_response_profile} "
-            f"id={env_cfg.joint_response_profile_id} "
-            f"control={env_cfg.control_hz:g}Hz physics={env_cfg.physics_hz:g}Hz"
         )
 
     camera_names = _set_camera_sensors_enabled(env_cfg, args_cli.enable_cameras)

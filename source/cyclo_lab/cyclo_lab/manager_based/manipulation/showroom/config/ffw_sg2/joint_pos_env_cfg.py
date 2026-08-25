@@ -22,16 +22,14 @@ from cyclo_lab.assets.sensors.ffw_sg2_cameras import (
     make_ffw_sg2_wrist_camera_cfg,
 )
 from cyclo_lab.assets.robots import FFW_SG2_PHYSICS_CFG
-from cyclo_lab.manager_based.actions import make_ffw_sg2_measured_response_actions_cfg
 from cyclo_lab.robot_specs.ffw.sg2 import (
     DEFAULT_SG2_CAMERA_PROFILE,
     FFW_SG2_SWERVE_DRIVE_SPEED_SCALE,
-    SG2_MEASURED_RESPONSE_PROFILE_ID,
     load_sg2_camera_profile,
 )
 
 from .mdp import ffw_sg2_showroom_events
-from .showroom_env_cfg import ActionsCfg, ShowroomEnvCfg
+from .showroom_env_cfg import ShowroomEnvCfg
 
 
 # Keep the real-aligned reset pose horizontally registered to the snack shelf.
@@ -122,14 +120,8 @@ class FFWSG2ShowroomEnvCfg(ShowroomEnvCfg):
     robot_profile_id: str = ""
     robot_profile_sha256: str = ""
     robot_profile_source: str = ""
-    joint_response_profile: str = "ideal"
-    joint_response_profile_id: str = "ideal"
 
     def __post_init__(self):
-        if self.joint_response_profile == "ideal":
-            self.joint_response_profile_id = "ideal"
-        else:
-            self._configure_joint_response(self.joint_response_profile)
         super().__post_init__()
         self.events = EventCfg()
 
@@ -140,33 +132,6 @@ class FFWSG2ShowroomEnvCfg(ShowroomEnvCfg):
 
         for object_name, object_cfg in iter_robotis_showroom_object_cfgs():
             setattr(self.scene, object_name, object_cfg)
-
-    def apply_joint_response_profile(self, profile_name: str) -> None:
-        """Select the stock or measured actuator response before creating the environment."""
-        self._configure_joint_response(profile_name)
-        ShowroomEnvCfg.__post_init__(self)
-
-    def _configure_joint_response(self, profile_name: str) -> None:
-        if profile_name == "ideal":
-            self.actions = ActionsCfg()
-            self.joint_response_profile_id = "ideal"
-            self.control_hz = 15.0
-            self.physics_hz = 30.0
-            self.camera_hz = 15.0
-        elif profile_name in ("measured", "measured-randomized"):
-            randomized = profile_name == "measured-randomized"
-            self.actions = make_ffw_sg2_measured_response_actions_cfg(randomized=randomized)
-            self.joint_response_profile_id = SG2_MEASURED_RESPONSE_PROFILE_ID
-            # The measured response profile was identified at these rates.
-            self.control_hz = 100.0
-            self.physics_hz = 100.0
-            self.camera_hz = 10.0
-        else:
-            raise ValueError(
-                "Unsupported SG2 joint response profile "
-                f"{profile_name!r}; expected ideal, measured, or measured-randomized."
-            )
-        self.joint_response_profile = profile_name
 
     def apply_robot_profile(self, profile_name: str) -> None:
         """Apply a validated physical-robot camera profile to this task."""
