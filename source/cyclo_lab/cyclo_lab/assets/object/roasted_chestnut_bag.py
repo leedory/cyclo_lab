@@ -5,7 +5,7 @@ from cyclo_lab.assets.object import CYCLO_LAB_OBJECT_ASSETS_DATA_DIR
 
 ROASTED_CHESTNUT_BAG_CFG = RigidObjectCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{CYCLO_LAB_OBJECT_ASSETS_DATA_DIR}/object/roasted_chestnut_bag.usd",
+        usd_path=f"{CYCLO_LAB_OBJECT_ASSETS_DATA_DIR}/object/roasted_chestnut_bag_convexhull.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             linear_damping=3.0,
