@@ -1,5 +1,11 @@
 """FFW SG2 robot-specific constants."""
 
+from .camera_profiles import (
+    DEFAULT_SG2_CAMERA_PROFILE,
+    SG2CameraCalibration,
+    SG2CameraProfile,
+    load_sg2_camera_profile,
+)
 from .control import (
     FFW_SG2_LIFT_POSITION_LOWER,
     FFW_SG2_LIFT_POSITION_UPPER,
@@ -63,6 +69,7 @@ __all__ = [
     "BASE_BODY",
     "BASE_FRAME",
     "CMD_VEL_TOPIC",
+    "DEFAULT_SG2_CAMERA_PROFILE",
     "FFW_SG2_ACTION_JOINT_NAMES",
     "FFW_SG2_ACTION_TOPICS",
     "FFW_SG2_CAMERA_TOPICS",
@@ -96,6 +103,8 @@ __all__ = [
     "LIFT_TOPIC",
     "ODOM_FRAME",
     "ODOM_TOPIC",
+    "SG2CameraCalibration",
+    "SG2CameraProfile",
     "SG2_SWERVE_DRIVE_DAMPING",
     "SG2_SWERVE_MODULE_ANGLE_OFFSETS",
     "SG2_SWERVE_MODULE_X_OFFSETS",
@@ -106,4 +115,5 @@ __all__ = [
     "SIMULATION_RESET_TOPIC",
     "TF_TOPIC",
     "clamp_lift_position",
+    "load_sg2_camera_profile",
 ]

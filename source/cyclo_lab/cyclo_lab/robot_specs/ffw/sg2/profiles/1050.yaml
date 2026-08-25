@@ -1,0 +1,83 @@
+schema_version: 1
+profile_id: sg2-1050-2026-08-24
+robot:
+  ssh_alias: '1050'
+  hostname: ffw-SNPR48A1050
+cameras:
+  head:
+    topic: /head_camera/color/camera_info
+    frame_id: zed_left_camera_optical_frame
+    serial: null
+    width: 640
+    height: 480
+    distortion_model: plumb_bob
+    d:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    k:
+    - 489.7808024
+    - 0.0
+    - 320.0
+    - 0.0
+    - 489.7808024
+    - 240.0263
+    - 0.0
+    - 0.0
+    - 1.0
+  wrist_left:
+    topic: /camera_left/camera_left/color/camera_info
+    frame_id: camera_left_color_optical_frame
+    serial: '335122270624'
+    width: 640
+    height: 480
+    distortion_model: plumb_bob
+    d:
+    - -0.052548039704561234
+    - 0.0581633560359478
+    - 0.00010541319352341816
+    - 0.000825238530524075
+    - -0.018877947703003883
+    k:
+    - 392.85992431640625
+    - 0.0
+    - 321.6305847167969
+    - 0.0
+    - 392.2402038574219
+    - 242.0066680908203
+    - 0.0
+    - 0.0
+    - 1.0
+  wrist_right:
+    topic: /camera_right/camera_right/color/camera_info
+    frame_id: camera_right_color_optical_frame
+    serial: '335122272052'
+    width: 640
+    height: 480
+    distortion_model: plumb_bob
+    d:
+    - -0.055024340748786926
+    - 0.0616723895072937
+    - -0.00016217156371567398
+    - 0.0004359635931905359
+    - -0.02069825306534767
+    k:
+    - 392.4100646972656
+    - 0.0
+    - 315.6520080566406
+    - 0.0
+    - 391.906982421875
+    - 240.0281982421875
+    - 0.0
+    - 0.0
+    - 1.0
+provenance:
+  captured_at_utc: '2026-08-24T02:44:27.768044+00:00'
+  capture_schema: sg2-camera-intrinsics-v1
+  capture_sha256: fc2df256491ddcd60198d64c2a3f563bec1d8dc7ab08563c7f6b86901adebf4f
+  experiment: 2026-08-24_11-42-30_sg2_1050_camera_intrinsics
+  ai_worker_image: robotis/ai-worker:2.2.1
+  ai_worker_commit: a960381bf6aa7488521006792ac387e82d1c7e59
+  note: Runtime CameraInfo capture; not a checkerboard recalibration.

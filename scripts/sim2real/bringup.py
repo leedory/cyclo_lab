@@ -27,6 +27,13 @@ parser.add_argument(
     choices=("none", "operator"),
     help="Optional local operator camera view.",
 )
+parser.add_argument(
+    "--robot-profile",
+    default="1050",
+    help=(
+        "Robot-specific calibration profile name or YAML path for tasks that support profiles (default: 1050)."
+    ),
+)
 parser.add_argument("--num_steps", type=int, default=0, help="Stop after this many steps; 0 runs indefinitely.")
 parser.add_argument("--max_runtime", type=float, default=0.0, help="Stop after this many seconds; 0 runs indefinitely.")
 parser.add_argument("--report_interval", type=int, default=120, help="Steps between control-rate reports; 0 disables.")
@@ -119,6 +126,15 @@ def _configure_environment():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     if not isinstance(env_cfg, ManagerBasedEnvCfg):
         raise TypeError(f"Task {args_cli.task} is not a manager-based environment.")
+
+    apply_robot_profile = getattr(env_cfg, "apply_robot_profile", None)
+    if apply_robot_profile is not None:
+        if args_cli.robot_profile != getattr(env_cfg, "robot_profile", None):
+            apply_robot_profile(args_cli.robot_profile)
+        print(
+            f"[Robot Profile] name={env_cfg.robot_profile} id={env_cfg.robot_profile_id} "
+            f"sha256={env_cfg.robot_profile_sha256}"
+        )
 
     camera_names = _set_camera_sensors_enabled(env_cfg, args_cli.enable_cameras)
     if args_cli.enable_cameras and not camera_names:

@@ -22,7 +22,11 @@ from cyclo_lab.assets.sensors.ffw_sg2_cameras import (
     make_ffw_sg2_wrist_camera_cfg,
 )
 from cyclo_lab.assets.robots import FFW_SG2_PHYSICS_CFG
-from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_SWERVE_DRIVE_SPEED_SCALE
+from cyclo_lab.robot_specs.ffw.sg2 import (
+    DEFAULT_SG2_CAMERA_PROFILE,
+    FFW_SG2_SWERVE_DRIVE_SPEED_SCALE,
+    load_sg2_camera_profile,
+)
 
 from .mdp import ffw_sg2_showroom_events
 from .showroom_env_cfg import ShowroomEnvCfg
@@ -31,8 +35,6 @@ from .showroom_env_cfg import ShowroomEnvCfg
 # Keep the real-aligned reset pose horizontally registered to the snack shelf.
 SG2_SHOWROOM_ROBOT_POS = (-1.47138, 1.59091, 0.0)
 SG2_SHOWROOM_ROBOT_ROT = (0.0, 0.0, 0.0, 1.0)
-SG2_SHOWROOM_HEAD_CAMERA_WIDTH = 640
-SG2_SHOWROOM_HEAD_CAMERA_HEIGHT = 480
 SG2_SHOWROOM_ROOT_POSITION_RANDOMIZATION_RADIUS = 0.0
 SG2_SHOWROOM_ROOT_YAW_RANDOMIZATION = 0.0
 SG2_SHOWROOM_WALL_BACKGROUND_ZOOM_RANGE = (1.0, 1.3)
@@ -53,7 +55,7 @@ SG2_SHOWROOM_INITIAL_JOINT_POSITIONS = {
     "arm_r_joint6": 0.4926,
     "arm_r_joint7": -0.7391,
     "gripper_r_joint1": 0.0,
-    "head_joint1": 0.5961,
+    "head_joint1": 0.2,
     "head_joint2": 0.0,
     "lift_joint": 0.0,
 }
@@ -114,6 +116,11 @@ class EventCfg:
 class FFWSG2ShowroomEnvCfg(ShowroomEnvCfg):
     """Canonical SG2 showroom environment used by the ROS2 topic runner."""
 
+    robot_profile: str = DEFAULT_SG2_CAMERA_PROFILE
+    robot_profile_id: str = ""
+    robot_profile_sha256: str = ""
+    robot_profile_source: str = ""
+
     def __post_init__(self):
         super().__post_init__()
         self.events = EventCfg()
@@ -121,24 +128,46 @@ class FFWSG2ShowroomEnvCfg(ShowroomEnvCfg):
         self.scene.robot = make_sg2_showroom_robot_cfg().replace(prim_path="{ENV_REGEX_NS}/Robot")
         self.scene.robot.spawn.semantic_tags = [("class", "robot")]
         self.scene.environment = make_robotis_showroom_environment_cfg(ROBOTIS_SHOWROOM_BACKGROUND_USD_PATH)
+        self.apply_robot_profile(self.robot_profile)
+
+        for object_name, object_cfg in iter_robotis_showroom_object_cfgs():
+            setattr(self.scene, object_name, object_cfg)
+
+    def apply_robot_profile(self, profile_name: str) -> None:
+        """Apply a validated physical-robot camera profile to this task."""
+
+        profile = load_sg2_camera_profile(profile_name)
+        head = profile.camera("head")
+        wrist_left = profile.camera("wrist_left")
+        wrist_right = profile.camera("wrist_right")
+
+        self.robot_profile = profile_name
+        self.robot_profile_id = profile.profile_id
+        self.robot_profile_sha256 = profile.source_sha256
+        self.robot_profile_source = str(profile.source_path)
+
         # Rendering cadence is owned by sim.render_interval. Sensors expose each
         # newly rendered frame directly to the topic bridge and operator viewer.
         self.scene.cam_head = make_ffw_sg2_head_camera_cfg(
             update_period=0.0,
-            width=SG2_SHOWROOM_HEAD_CAMERA_WIDTH,
-            height=SG2_SHOWROOM_HEAD_CAMERA_HEIGHT,
+            width=head.width,
+            height=head.height,
+            intrinsic_matrix=head.intrinsic_matrix,
         )
         self.scene.cam_wrist_left = make_ffw_sg2_wrist_camera_cfg(
             "left",
             update_period=0.0,
+            width=wrist_left.width,
+            height=wrist_left.height,
+            intrinsic_matrix=wrist_left.intrinsic_matrix,
         )
         self.scene.cam_wrist_right = make_ffw_sg2_wrist_camera_cfg(
             "right",
             update_period=0.0,
+            width=wrist_right.width,
+            height=wrist_right.height,
+            intrinsic_matrix=wrist_right.intrinsic_matrix,
         )
-
-        for object_name, object_cfg in iter_robotis_showroom_object_cfgs():
-            setattr(self.scene, object_name, object_cfg)
 
     def enable_operator_preview_cameras(self) -> None:
         """Enable the robot-following cameras used only by the operator dashboard."""
