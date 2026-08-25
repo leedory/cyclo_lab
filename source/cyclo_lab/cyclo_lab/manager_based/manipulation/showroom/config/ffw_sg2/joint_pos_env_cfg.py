@@ -28,7 +28,8 @@ from .mdp import ffw_sg2_showroom_events
 from .showroom_env_cfg import ShowroomEnvCfg
 
 
-SG2_SHOWROOM_ROBOT_POS = (-1.316, 1.681, 0.0)
+# Keep the real-aligned reset pose horizontally registered to the snack shelf.
+SG2_SHOWROOM_ROBOT_POS = (-1.47138, 1.59091, 0.0)
 SG2_SHOWROOM_ROBOT_ROT = (0.0, 0.0, 0.0, 1.0)
 SG2_SHOWROOM_HEAD_CAMERA_WIDTH = 640
 SG2_SHOWROOM_HEAD_CAMERA_HEIGHT = 480
