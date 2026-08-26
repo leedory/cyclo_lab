@@ -43,6 +43,8 @@ ROBOTIS_SHOWROOM_OBJECT_ROT_X_90 = (0.70710677, 0.70710677, 0.0, 0.0)
 
 _SPAWN_ROBOTIS_SHOWROOM_ENVIRONMENT = None
 
+_KOLBJORN_CABINET_PRIM_NAMES = ("kolbjorn_cabinet_1", "kolbjorn_cabinet_02")
+
 
 def _make_showroom_floor_visual_only(prim_path: str) -> None:
     from isaacsim.core.utils.stage import get_current_stage
@@ -69,6 +71,35 @@ def _make_showroom_floor_visual_only(prim_path: str) -> None:
         print("[Robotis showroom] using visual-only showroom floor over Isaac ground plane contact.")
 
 
+def _bind_kolbjorn_package_friction(prim_path: str) -> None:
+    import isaaclab.sim as sim_utils
+    from isaaclab.sim.utils import bind_physics_material
+    from isaacsim.core.utils.stage import get_current_stage
+
+    stage = get_current_stage()
+    material_path = f"{prim_path}/kolbjornPackagePhysicsMaterial"
+    physics_material = sim_utils.RigidBodyMaterialCfg(
+        friction_combine_mode="min",
+        restitution_combine_mode="min",
+        static_friction=0.35,
+        dynamic_friction=0.30,
+        restitution=0.0,
+    )
+    physics_material.func(material_path, physics_material)
+
+    bound_paths = []
+    for cabinet_name in _KOLBJORN_CABINET_PRIM_NAMES:
+        cabinet_path = f"{prim_path}/robotis_showroom/{cabinet_name}"
+        cabinet_prim = stage.GetPrimAtPath(cabinet_path)
+        if not cabinet_prim.IsValid():
+            continue
+        bind_physics_material(cabinet_path, material_path)
+        bound_paths.append(cabinet_path)
+
+    if bound_paths:
+        print(f"[Robotis showroom] bound package friction material to {len(bound_paths)} Kolbjorn cabinets.")
+
+
 def _spawn_robotis_showroom_environment_once(
     prim_path,
     cfg,
@@ -85,6 +116,7 @@ def _spawn_robotis_showroom_environment_once(
         **kwargs,
     )
     _make_showroom_floor_visual_only(prim_path)
+    _bind_kolbjorn_package_friction(prim_path)
     return prim
 
 

@@ -50,6 +50,14 @@ _SG2_WHEEL_PHYSICS_MATERIAL = RigidBodyMaterialCfg(
     restitution=0.0,
 )
 
+_SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL = RigidBodyMaterialCfg(
+    friction_combine_mode="max",
+    restitution_combine_mode="min",
+    static_friction=1.2,
+    dynamic_friction=1.0,
+    restitution=0.0,
+)
+
 _SG2_BASE_LINK_NAME = "world"
 _SG2_WHEEL_LINKS = (
     "left_wheel_steer_link",
@@ -192,6 +200,38 @@ def _bind_sg2_wheel_physics_material(stage, prim_path: str, material_path: str) 
         print(f"[SG2 base physics] bound wheel physics material to {len(wheel_collision_paths)} drive collisions.")
 
 
+def _iter_sg2_distal_gripper_collision_prims(stage, prim_path: str):
+    distal_link_pattern = r"gripper_[lr]_rh_p12_rn_[rl]2"
+
+    for child_prim in _iter_robot_prims(stage, prim_path):
+        child_path = str(child_prim.GetPath())
+        lower_path = child_path.lower()
+        if "/collisions/" not in lower_path:
+            continue
+        if not re.search(rf"(^|/)({distal_link_pattern})(/|_|$)", lower_path):
+            continue
+        if not child_prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        collision_enabled = UsdPhysics.CollisionAPI(child_prim).GetCollisionEnabledAttr().Get()
+        if collision_enabled is False:
+            continue
+        yield child_prim
+
+
+def _bind_sg2_distal_gripper_physics_material(stage, prim_path: str, material_path: str) -> None:
+    collision_paths = [
+        str(collision_prim.GetPath())
+        for collision_prim in _iter_sg2_distal_gripper_collision_prims(stage, prim_path)
+    ]
+    for collision_path in collision_paths:
+        bind_physics_material(collision_path, material_path)
+    if collision_paths:
+        print(
+            "[SG2 gripper physics] bound distal rubber material to "
+            f"{len(collision_paths)} r2/l2 collisions."
+        )
+
+
 @clone
 def spawn_sg2_with_base_physics(prim_path, cfg, translation=None, orientation=None, **kwargs):
     """Spawn SG2 with a free mobile base and wheel-contact physics helpers."""
@@ -206,6 +246,10 @@ def spawn_sg2_with_base_physics(prim_path, cfg, translation=None, orientation=No
     material_path = f"{prim_path}/wheelPhysicsMaterial"
     _SG2_WHEEL_PHYSICS_MATERIAL.func(material_path, _SG2_WHEEL_PHYSICS_MATERIAL)
     _bind_sg2_wheel_physics_material(stage, prim_path, material_path)
+
+    material_path = f"{prim_path}/distalGripperPhysicsMaterial"
+    _SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL.func(material_path, _SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL)
+    _bind_sg2_distal_gripper_physics_material(stage, prim_path, material_path)
 
     _filter_sg2_base_wheel_collisions(stage, prim_path)
     return prim
