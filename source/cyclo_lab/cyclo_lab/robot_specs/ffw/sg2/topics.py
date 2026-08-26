@@ -25,4 +25,6 @@ FFW_SG2_CAMERA_TOPICS = {
     "cam_head": "/zed/zed_node/left/image_rect_color/compressed",
     "cam_wrist_left": "/camera_left/camera_left/color/image_rect_raw/compressed",
     "cam_wrist_right": "/camera_right/camera_right/color/image_rect_raw/compressed",
+    # Enabled by the showroom's ``--camera_view operator`` configuration.
+    "cam_overhead_center": "/camera_external/color/image_rect_raw/compressed",
 }

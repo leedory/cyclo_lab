@@ -75,6 +75,11 @@ parser.set_defaults(publish_extra_state_topics=True)
 parser.add_argument("--profile", action="store_true", help="Print timing statistics for the recording loop.")
 parser.add_argument("--profile_interval", type=int, default=120, help="Loop iterations between profile reports.")
 parser.add_argument(
+    "--render_episode_cameras",
+    action="store_true",
+    help="After recording, render one labeled three-camera MP4 per saved episode beside the HDF5 dataset.",
+)
+parser.add_argument(
     "--profile_cuda_sync",
     action="store_true",
     help="Synchronize CUDA around profiled sections for more accurate GPU timing. This adds overhead.",
@@ -305,6 +310,66 @@ def make_operator_view(env_cfg, env):
     return dashboard
 
 
+
+def _recording_metadata(env_cfg, task_name: str, target_step_hz: float) -> dict:
+    """Return explicit HDF5 contract metadata for seed-demo recording."""
+    metadata = {
+        "schema_version": "cyclo_isaac_hdf5_v1",
+        "robot_contract_id": "ffw_sg2_rev1_fixed_base_19d",
+        "control_hz": float(target_step_hz),
+        "camera_hz": float(getattr(env_cfg, "camera_hz", target_step_hz)),
+        "action_semantics": "pre_step_raw_absolute_joint_position_command",
+        "observation_semantics": "pre_step",
+        "scene_state_semantics": "post_step",
+        "task_env_name": task_name,
+        "task_id": str(getattr(env_cfg, "task_id", "")),
+        "task_instruction": str(getattr(env_cfg, "task_instruction", "")),
+        "target_object_name": str(getattr(env_cfg, "target_object", "")),
+        "target_side": str(getattr(env_cfg, "target_side", "")),
+        "success_criterion_id": "manual_operator_acceptance",
+        "dataset_origin": "isaaclab_hdf5_seed",
+    }
+
+    if args_cli.robot_type == "FFW_SG2":
+        from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_ACTION_JOINT_NAMES, FFW_SG2_PUBLISHED_JOINT_NAMES
+
+        metadata["action_names"] = list(FFW_SG2_ACTION_JOINT_NAMES)
+        metadata["observation_state_names"] = list(FFW_SG2_PUBLISHED_JOINT_NAMES)
+        metadata["action_units"] = ["rad"] * 16 + ["m", "rad", "rad"]
+        metadata["observation_state_units"] = ["rad"] * 18 + ["m"]
+
+    return metadata
+
+
+def _set_dataset_metadata(recorder_manager, metadata: dict) -> None:
+    handler = getattr(recorder_manager, "_dataset_file_handler", None)
+    if handler is None:
+        return
+    set_metadata = getattr(handler, "set_dataset_metadata", None)
+    if set_metadata is None:
+        return
+    set_metadata(metadata)
+
+
+def _set_episode_metadata(recorder_manager, metadata: dict) -> None:
+    for ep in getattr(recorder_manager, "_episodes", {}).values():
+        if ep is not None and not ep.is_empty():
+            ep.metadata = dict(metadata)
+
+
+def _record_step_metadata(recorder_manager, step_index: int, target_step_hz: float, device: str) -> None:
+    timestamp_s = step_index / target_step_hz
+    recorder_manager.add_to_episodes(
+        "obs/timestamp_s",
+        torch.tensor([[timestamp_s]], dtype=torch.float64, device=device),
+    )
+    recorder_manager.add_to_episodes(
+        "obs/step_index",
+        torch.tensor([[step_index]], dtype=torch.int64, device=device),
+    )
+
+
+
 def main():
     """Running cyclo_lab teleoperation with cyclo_lab manipulation environment."""
 
@@ -378,6 +443,7 @@ def main():
         )
 
     start_record_state = False
+    recorded_step_index = 0
 
     def clear_episode_cache(context: str):
         try:
@@ -402,7 +468,6 @@ def main():
             print("[Control] Save ignored because recording has not started.")
             return
         should_reset_task_success = True
-        reset_recording_instance()
 
     teleop_interface.add_callback("R", reset_recording_instance)
     teleop_interface.add_callback("N", reset_task_success)
@@ -411,6 +476,8 @@ def main():
     if target_step_hz is None:
         target_step_hz = getattr(env_cfg, "recording_control_hz", 60.0)
     rate_limiter = RateLimiter(target_step_hz)
+    recording_metadata = _recording_metadata(env_cfg, task_name, target_step_hz)
+    _set_dataset_metadata(env.recorder_manager, recording_metadata)
 
     # reset environment
     env.reset()
@@ -422,12 +489,13 @@ def main():
     should_start_recording_instance = False
 
     def start_recording_instance():
-        nonlocal start_record_state
+        nonlocal start_record_state, recorded_step_index
         if start_record_state:
             return
         clear_episode_cache("pre-recording")
         env.recorder_manager.recording_enabled = True
         env.recorder_manager.record_post_reset(torch.arange(env.num_envs, device=env.device))
+        recorded_step_index = 0
         start_record_state = True
         print("Start Recording!!!")
 
@@ -452,23 +520,32 @@ def main():
                         start_recording_instance()
                 if should_reset_task_success:
                     with profiler.time("save_success_export"):
-                        print("Task Success!!!")
                         should_reset_task_success = False
-                        env.termination_manager.set_term_cfg("success", TerminationTermCfg(func=lambda env: torch.ones(env.num_envs, dtype=torch.bool, device=env.device)))
+                        print("[Control] Saving operator-accepted demo.")
+
+                        env.termination_manager.set_term_cfg(
+                            "success",
+                            TerminationTermCfg(
+                                func=lambda env: torch.ones(
+                                    env.num_envs, dtype=torch.bool, device=env.device
+                                )
+                            ),
+                        )
                         env.termination_manager.compute()
-                        # Mark current buffered episode(s) as successful and export before resetting
                         try:
-                            for env_id, ep in getattr(env.recorder_manager, "_episodes", {}).items():
+                            episode_metadata = dict(recording_metadata)
+                            episode_metadata["operator_accepted"] = True
+                            for ep in getattr(env.recorder_manager, "_episodes", {}).values():
                                 if ep is not None and not ep.is_empty():
                                     ep.success = True
-                        except Exception as e:
-                            print(f"Warning: Failed to mark episodes as successful: {e}")
-                            print(f"Exception details: {type(e).__name__}: {str(e)}")
+                            _set_episode_metadata(env.recorder_manager, episode_metadata)
+                        except Exception as exc:
+                            print(f"Warning: Failed to mark episodes as successful: {exc}")
 
                         env.recorder_manager.cfg.dataset_export_mode = DatasetExportMode.EXPORT_ALL
                         env.recorder_manager.export_episodes(from_step=False)
                         env.recorder_manager.cfg.dataset_export_mode = DatasetExportMode.EXPORT_NONE
-                        # Update and report successful demo count immediately after export
+                        should_reset_recording_instance = True
                         if env.recorder_manager.exported_successful_episode_count > current_recorded_demo_count:
                             current_recorded_demo_count = env.recorder_manager.exported_successful_episode_count
                             print(f"Recorded {current_recorded_demo_count} successful demonstrations.")
@@ -512,6 +589,9 @@ def main():
                         # Handle tensor actions
                         if actions.ndim == 1:
                             actions = actions.unsqueeze(0)
+                        if start_record_state and env.recorder_manager.recording_enabled:
+                            _record_step_metadata(env.recorder_manager, recorded_step_index, target_step_hz, env.device)
+                            recorded_step_index += 1
                         with profiler.time("env_step"):
                             env.step(actions)
                 if operator_view is not None:
@@ -530,6 +610,30 @@ def main():
     release_camera_sensors_before_close(env)
     env.close()
     simulation_app.close()
+
+    if args_cli.render_episode_cameras:
+        from pathlib import Path
+        import sys
+
+        renderer_dir = Path(__file__).resolve().parents[1]
+        sys.path.insert(0, str(renderer_dir))
+        from render_hdf5_cameras import render_dataset
+
+        try:
+            index_path = render_dataset(
+                Path(args_cli.dataset_file),
+                camera_names=getattr(
+                    env_cfg,
+                    "policy_camera_names",
+                    ("cam_head", "cam_wrist_left", "cam_wrist_right"),
+                ),
+                rotations=dict(getattr(env_cfg, "operator_camera_rotations", ())),
+                fps=float(getattr(env_cfg, "camera_hz", target_step_hz)),
+                overwrite=True,
+            )
+            print(f"[Camera Preview] Open {index_path} to review all episodes.")
+        except Exception as exc:
+            print(f"[Camera Preview] Failed to render saved episodes: {exc}")
 
 
 if __name__ == "__main__":

@@ -35,8 +35,8 @@ SEED_TASK_SPECS: dict[str, SeedTaskSpec] = {
     "000458": SeedTaskSpec(
         task_id="000458",
         env_name="Cyclo-Real-Showroom-Pick-Peanut-FFW-SG2-v0",
-        instruction="Pick up the Peanut Mix with right gripper.",
-        target_object="peanut_mix_bag",
+        instruction="Take peanut_mix_bag_02 out of the shelf with the right gripper.",
+        target_object="peanut_mix_bag_02",
         target_side="right",
         environment_usd_path=ROBOTIS_SHOWROOM_BACKGROUND_USD_PATH,
     ),

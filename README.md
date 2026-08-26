@@ -295,7 +295,19 @@ python scripts/sim2real/imitation_learning/recorder/record_demos.py \
     --num_demos 6 \
     --step_hz 15 \
     --enable_cameras \
-    --camera_view operator
+    --camera_view operator \
+    --render_episode_cameras
+```
+
+With `--render_episode_cameras`, recording creates one labeled, side-by-side
+three-camera MP4 per episode and an `index.html` viewer in
+`datasets/task_000458_showroom_seed_raw_camera_previews/`. Existing HDF5 files
+can be rendered without launching Isaac Sim:
+
+```bash
+python scripts/sim2real/imitation_learning/render_hdf5_cameras.py \
+    --input-file ./datasets/task_000458_showroom_seed_raw.hdf5 \
+    --overwrite
 ```
 
 Launch FFW SG2 in the IsaacLab-Arena Galileo pick-and-place environment

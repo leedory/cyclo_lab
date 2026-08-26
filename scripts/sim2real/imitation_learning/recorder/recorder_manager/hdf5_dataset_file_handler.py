@@ -21,6 +21,7 @@
 
 import enum
 import copy
+import json
 import h5py
 import torch
 import numpy as np
@@ -145,6 +146,12 @@ class StreamingHDF5DatasetFileHandler(HDF5DatasetFileHandler):
         def shutdown(self):
             self.executor.shutdown(wait=True)
 
+    @staticmethod
+    def _hdf5_attr_value(value):
+        if isinstance(value, (str, int, float, bool, np.integer, np.floating, np.bool_)):
+            return value
+        return json.dumps(value)
+
     @property
     def chunks_length(self) -> int:
         return self._chunks_length
@@ -160,6 +167,11 @@ class StreamingHDF5DatasetFileHandler(HDF5DatasetFileHandler):
     @compression.setter
     def compression(self, compression: str | None):
         self._compression = compression
+
+    def set_dataset_metadata(self, metadata: dict) -> None:
+        self._raise_if_not_initialized()
+        for key, value in metadata.items():
+            self._hdf5_data_group.attrs[key] = self._hdf5_attr_value(value)
 
     def write_episode(self, episode: EpisodeData, write_mode: StreamWriteMode):
         self._raise_if_not_initialized()
@@ -185,6 +197,9 @@ class StreamingHDF5DatasetFileHandler(HDF5DatasetFileHandler):
 
         if episode.success is not None:
             h5_episode_group.attrs["success"] = episode.success
+
+        for key, value in getattr(episode, "metadata", {}).items():
+            h5_episode_group.attrs[key] = self._hdf5_attr_value(value)
 
         self._writer.write_episode(h5_episode_group, episode, write_mode)
 
