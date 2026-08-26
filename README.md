@@ -274,6 +274,13 @@ python scripts/sim2real/bringup.py \
     --bridge ffw_sg2 \
     --headless \
     --camera_view operator
+
+# Same 22D digital twin, with robot and selected-object randomization on R
+python scripts/sim2real/bringup.py \
+    --task Cyclo-Real-Showroom-Random-FFW-SG2-v0 \
+    --bridge ffw_sg2 \
+    --headless \
+    --camera_view operator
 ```
 
 Record Task 000458 (pick up the Peanut Mix with the right gripper) seed
@@ -284,12 +291,12 @@ and reset. Add `--camera_view operator` to show the six-camera operator
 dashboard; the dashboard is for teleoperation and is not written as an extra
 HDF5 observation. Seed task parameters such as task id, target object, policy cameras,
 and showroom USD are defined in
-`source/cyclo_lab/cyclo_lab/manager_based/manipulation/showroom/config/ffw_sg2/seed_task_specs.py`;
+`source/cyclo_lab/cyclo_lab/manager_based/manipulation/showroom/config/ffw_sg2/tasks/task_000458/spec.py`;
 add a new spec and gym registration for the next seed task.
 
 ```bash
 python scripts/sim2real/imitation_learning/recorder/record_demos.py \
-    --task=Cyclo-Real-Showroom-Pick-Peanut-FFW-SG2-v0 \
+    --task=Cyclo-Real-Showroom-Task000458-FFW-SG2-v0 \
     --robot_type FFW_SG2 \
     --dataset_file ./datasets/task_000458_showroom_seed_raw.hdf5 \
     --num_demos 6 \
@@ -310,6 +317,58 @@ python scripts/sim2real/imitation_learning/render_hdf5_cameras.py \
     --overwrite
 ```
 
+For raw seed recording with reset-time randomization, use
+`Cyclo-Real-Showroom-Task000458-Random-FFW-SG2-v0`. Its
+`TASK000458_RECORD_RANDOM` profile is wired to both the SG2 root and the selected
+objects: each `R` reset currently samples robot X/Y within ±0.030 m and yaw within
+±5°, and Peanut-02 X/Y within ±0.010 m and yaw within ±10°. Setting either profile
+section's `enabled` field to `False` disables that reset event.
+
+Continuous and episodic presets now compile their selected profile through the
+same `randomization/event_cfg.py` builder. Task-specific profiles live in
+`tasks/task_000xxx/profiles.py`; Task000458 derives its record target, Mimic target,
+non-target presence list, and policy cameras from `TASK_000458_SPEC`. A new task
+therefore selects a profile without copying `EventTerm` wiring. Calling
+`cfg.apply_randomization_profile(profile)` also rebuilds the optional reset terms
+for an already-created configuration object.
+
+Task000458 uses distinct deterministic annotation and randomized generation
+presets. The generic converter preserves input metadata and changes the output
+environment ID only when explicitly requested:
+
+```bash
+python scripts/sim2real/imitation_learning/mimic/action_data_converter.py \
+    --robot_type FFW_SG2 \
+    --input_file ./datasets/task_000458_showroom_seed_raw.hdf5 \
+    --output_file ./datasets/task_000458_ik.hdf5 \
+    --action_type ik \
+    --output_env_name Cyclo-Real-Showroom-Task000458-Mimic-Seed-FFW-SG2-v0
+
+python scripts/sim2real/imitation_learning/mimic/annotate_demos.py \
+    --task Cyclo-Real-Showroom-Task000458-Mimic-Seed-FFW-SG2-v0 \
+    --auto \
+    --input_file ./datasets/task_000458_ik.hdf5 \
+    --output_file ./datasets/task_000458_annotated.hdf5 \
+    --enable_cameras \
+    --headless
+
+python scripts/sim2real/imitation_learning/mimic/generate_dataset.py \
+    --device cuda \
+    --num_envs 10 \
+    --task Cyclo-Real-Showroom-Task000458-Mimic-Generate-FFW-SG2-v0 \
+    --generation_num_trials 500 \
+    --input_file ./datasets/task_000458_annotated.hdf5 \
+    --output_file ./datasets/task_000458_generated.hdf5 \
+    --enable_cameras \
+    --headless
+
+python scripts/sim2real/imitation_learning/mimic/action_data_converter.py \
+    --robot_type FFW_SG2 \
+    --input_file ./datasets/task_000458_generated.hdf5 \
+    --output_file ./datasets/task_000458_final.hdf5 \
+    --action_type joint
+```
+
 Launch FFW SG2 in the IsaacLab-Arena Galileo pick-and-place environment
 
 ```bash
@@ -320,6 +379,10 @@ python scripts/sim2real/bringup.py \
     --enable_cameras \
     --headless
 ```
+
+If `generate_dataset.py` is run without `--task` and the annotated HDF5 names a
+`-Mimic-Seed-` preset, it selects the registered `-Mimic-Generate-` counterpart.
+An explicit `--task` always takes precedence.
 
 </details>
 

@@ -14,17 +14,28 @@ from isaaclab.sensors import CameraCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab.utils import configclass
 
-from cyclo_lab.manager_based.actions import (
-    FFWSG2MobileActionsCfg,
-)
 from cyclo_lab.robot_specs.ffw.sg2 import (
     FFW_SG2_PUBLISHED_JOINT_NAMES,
 )
 
-from . import mdp
+from . import observations as showroom_obs
+from .action_cfg import ContinuousShowroomActionsCfg
 
 
 SHOWROOM_CAMERA_NAMES = ("cam_head", "cam_wrist_left", "cam_wrist_right")
+OPERATOR_CAMERA_ROWS = (
+    (
+        ("cam_overhead_left", "External Left"),
+        ("cam_overhead_center", "External Top"),
+        ("cam_overhead_right", "External Right"),
+    ),
+    (
+        ("cam_wrist_left", "Wrist Left"),
+        ("cam_head", "Head"),
+        ("cam_wrist_right", "Wrist Right"),
+    ),
+)
+OPERATOR_CAMERA_ROTATIONS = (("cam_wrist_left", 1), ("cam_wrist_right", 1))
 
 
 @configclass
@@ -52,26 +63,21 @@ class ShowroomSceneCfg(InteractiveSceneCfg):
 
 
 @configclass
-class ActionsCfg(FFWSG2MobileActionsCfg):
-    """Canonical 19 SG2 joint targets followed by 3D base velocity."""
-
-
-@configclass
 class ObservationsCfg:
     """Low-dimensional state kept available to manager-based consumers."""
 
     @configclass
     class PolicyCfg(ObsGroup):
-        actions = ObsTerm(func=mdp.last_action)
+        actions = ObsTerm(func=showroom_obs.last_action)
         joint_pos = ObsTerm(
-            func=mdp.joint_pos_name,
+            func=showroom_obs.joint_pos_name,
             params={"joint_names": FFW_SG2_PUBLISHED_JOINT_NAMES, "asset_name": "robot"},
         )
         joint_pos_target = ObsTerm(
-            func=mdp.joint_pos_target_name,
+            func=showroom_obs.joint_pos_target_name,
             params={"joint_names": FFW_SG2_PUBLISHED_JOINT_NAMES, "asset_name": "robot"},
         )
-        base_twist = ObsTerm(func=mdp.base_twist, params={"asset_name": "robot"})
+        base_twist = ObsTerm(func=showroom_obs.base_twist, params={"asset_name": "robot"})
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -93,27 +99,13 @@ class ShowroomEnvCfg(ManagerBasedEnvCfg):
     control_hz: float = 15.0
     physics_hz: float = 30.0
     camera_hz: float = 15.0
-    operator_camera_rows: tuple = (
-        (
-            ("cam_overhead_left", "External Left"),
-            ("cam_overhead_center", "External Top"),
-            ("cam_overhead_right", "External Right"),
-        ),
-        (
-            ("cam_wrist_left", "Wrist Left"),
-            ("cam_head", "Head"),
-            ("cam_wrist_right", "Wrist Right"),
-        ),
-    )
-    operator_camera_rotations: tuple = (
-        ("cam_wrist_left", 1),
-        ("cam_wrist_right", 1),
-    )
+    operator_camera_rows: tuple = OPERATOR_CAMERA_ROWS
+    operator_camera_rotations: tuple = OPERATOR_CAMERA_ROTATIONS
     operator_camera_title: str = "SG2 Operator Dashboard"
     operator_camera_window_size: int = 1800
     scene: ShowroomSceneCfg = ShowroomSceneCfg(num_envs=1, env_spacing=8.0, replicate_physics=False)
     observations: ObservationsCfg = ObservationsCfg()
-    actions: ActionsCfg = ActionsCfg()
+    actions: ContinuousShowroomActionsCfg = ContinuousShowroomActionsCfg()
     events: EventsCfg = EventsCfg()
 
     def __post_init__(self):

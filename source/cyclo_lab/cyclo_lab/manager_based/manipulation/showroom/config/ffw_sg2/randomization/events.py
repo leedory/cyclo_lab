@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 import torch
 from isaaclab.assets import Articulation
@@ -60,6 +60,59 @@ def randomize_root_pose_in_radius(
     yaw_delta = math_utils.quat_from_euler_xyz(torch.zeros_like(yaw), torch.zeros_like(yaw), yaw)
     root_pose[:, 3:7] = math_utils.quat_mul(root_pose[:, 3:7], yaw_delta)
     asset.write_root_pose_to_sim(root_pose, env_ids=env_ids)
+
+
+def randomize_root_pose_in_xy_box(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    x_max: float,
+    y_max: float,
+    yaw_max: float,
+    asset_cfg: SceneEntityCfg,
+):
+    """Randomize an asset root uniformly around its default X/Y/yaw pose."""
+    if min(x_max, y_max, yaw_max) < 0.0:
+        raise ValueError("Root pose randomization limits must be non-negative.")
+
+    asset = env.scene[asset_cfg.name]
+    samples = torch.rand((len(env_ids), 3), device=asset.device) * 2.0 - 1.0
+    delta_x = samples[:, 0] * x_max
+    delta_y = samples[:, 1] * y_max
+    delta_yaw = samples[:, 2] * yaw_max
+
+    root_pose = asset.data.default_root_state[env_ids, :7].clone()
+    root_pose[:, :3] += env.scene.env_origins[env_ids]
+    root_pose[:, 0] += delta_x
+    root_pose[:, 1] += delta_y
+    zero = torch.zeros_like(delta_yaw)
+    yaw_delta = math_utils.quat_from_euler_xyz(zero, zero, delta_yaw)
+    root_pose[:, 3:7] = math_utils.quat_mul(yaw_delta, root_pose[:, 3:7])
+
+    asset.write_root_pose_to_sim(root_pose, env_ids=env_ids)
+    asset.write_root_velocity_to_sim(
+        torch.zeros((len(env_ids), 6), dtype=root_pose.dtype, device=asset.device),
+        env_ids=env_ids,
+    )
+
+
+def randomize_root_poses_in_xy_box(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    object_names: Sequence[str],
+    x_max: float,
+    y_max: float,
+    yaw_max: float,
+) -> None:
+    """Apply one shared pose range independently to selected scene objects."""
+    for object_name in object_names:
+        randomize_root_pose_in_xy_box(
+            env,
+            env_ids,
+            x_max=x_max,
+            y_max=y_max,
+            yaw_max=yaw_max,
+            asset_cfg=SceneEntityCfg(object_name),
+        )
 
 
 def randomize_wall_background(

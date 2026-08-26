@@ -7,15 +7,11 @@ import torch
 from collections.abc import Sequence
 
 import isaaclab.utils.math as PoseUtils
-from isaaclab.envs import ManagerBasedRLEnvCfg
-
-from cyclo_lab.manager_based.manipulation.common import FFWSG2MimicEnv
+from isaaclab.envs import ManagerBasedRLMimicEnv, ManagerBasedRLEnvCfg
 
 
-class FFWSG2PickPlaceMimicEnv(FFWSG2MimicEnv):
-    """
-    Isaac Lab Mimic environment wrapper class for FFW SG2 Pick and Place.
-    """
+class FFWSG2MimicEnv(ManagerBasedRLMimicEnv):
+    """Task-neutral Isaac Lab Mimic adapter for the dual-arm FFW SG2 robot."""
 
     def __init__(self, cfg: ManagerBasedRLEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
