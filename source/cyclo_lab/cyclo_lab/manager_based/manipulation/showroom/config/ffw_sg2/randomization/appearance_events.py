@@ -20,66 +20,12 @@ SHELF_TEXTURE_SUFFIX = (
     "/RobotisShowroom/robotis_showroom/kolbjorn_cabinet_1/AssetFrame/Asset/"
     "Looks/material_0/diffuseTex"
 )
-PRESENCE_PARK_OFFSET_M = (5.0, 0.0, 2.0)
 
 
 def _ids(env: ManagerBasedEnv, env_ids) -> torch.Tensor:
     if env_ids is None:
         return torch.arange(env.num_envs, dtype=torch.long, device=env.device)
     return torch.as_tensor(env_ids, dtype=torch.long, device=env.device).reshape(-1)
-
-
-def randomize_non_target_presence(
-    env: ManagerBasedEnv,
-    env_ids: torch.Tensor,
-    object_names: Sequence[str],
-    disappearance_probability: float,
-) -> None:
-    """Restore present packets canonically and park absent packets outside the showroom.
-
-    Each object/environment pair receives an independent Bernoulli draw.  The
-    full ``[num_envs]`` mask is retained across partial resets so downstream
-    writers always see a constant schema.
-    """
-    if not 0.0 <= disappearance_probability <= 1.0:
-        raise ValueError("disappearance_probability must be in [0, 1]")
-    ids = _ids(env, env_ids)
-    presence = getattr(env, "_task458_non_target_presence", {})
-    parked_positions = getattr(env, "_task458_non_target_park_position_w", {})
-    for name in object_names:
-        asset = env.scene[name]
-        present = torch.rand(len(ids), device=asset.device) >= disappearance_probability
-        full_mask = presence.get(name)
-        if full_mask is None:
-            full_mask = torch.ones(env.num_envs, dtype=torch.bool, device=asset.device)
-            presence[name] = full_mask
-        full_mask[ids] = present
-
-        state = asset.data.default_root_state[ids].clone()
-        state[:, :3] += env.scene.env_origins[ids]
-        absent = ~present
-        park_position = env.scene.env_origins[ids].to(dtype=state.dtype).clone()
-        park_position += torch.tensor(
-            PRESENCE_PARK_OFFSET_M, dtype=state.dtype, device=asset.device
-        )
-        state[absent, :3] = park_position[absent]
-        asset.write_root_pose_to_sim(state[:, :7], env_ids=ids)
-        asset.write_root_velocity_to_sim(
-            torch.zeros((len(ids), 6), dtype=state.dtype, device=asset.device),
-            env_ids=ids,
-        )
-        full_park_position = parked_positions.get(name)
-        if full_park_position is None:
-            full_park_position = env.scene.env_origins.to(
-                dtype=state.dtype, device=asset.device
-            ).clone()
-            full_park_position += torch.tensor(
-                PRESENCE_PARK_OFFSET_M, dtype=state.dtype, device=asset.device
-            )
-            parked_positions[name] = full_park_position
-        full_park_position[ids] = park_position
-    env._task458_non_target_presence = presence
-    env._task458_non_target_park_position_w = parked_positions
 
 
 def randomize_shelf_texture_scale(

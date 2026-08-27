@@ -23,6 +23,9 @@ try:
         RobotRootRandomizationCfg,
         ShowroomRandomizationCfg,
     )
+    from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.randomization.presence_events import (
+        randomize_non_target_presence,
+    )
     from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000458.env_cfg import (
         Task000458RandomEnvCfg,
     )
@@ -111,6 +114,10 @@ try:
     )
     generation = Task000458MimicGenerateEnvCfg(
         randomization=generation_profile
+    )
+    assert (
+        generation.events.randomize_non_target_presence.func
+        is randomize_non_target_presence
     )
     assert generation.target_object == TASK_000458_SPEC.target_object
     assert (

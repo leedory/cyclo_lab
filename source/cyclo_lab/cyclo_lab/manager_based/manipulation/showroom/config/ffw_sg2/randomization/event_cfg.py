@@ -8,6 +8,7 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 
 from . import appearance_events
+from . import presence_events
 from . import events as pose_events
 from . import task_pose_events
 from .cfg import (
@@ -149,7 +150,7 @@ def _configure_generation_events(
     presence = profile.presence
     event_cfg.randomize_non_target_presence = (
         EventTerm(
-            func=appearance_events.randomize_non_target_presence,
+            func=presence_events.randomize_non_target_presence,
             mode="reset",
             params={
                 "object_names": presence.object_names,
