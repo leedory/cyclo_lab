@@ -87,6 +87,9 @@ def initialize_metric_buffers(env, target_name: str) -> None:
     env._task458_grasp_latched = torch.zeros(
         count, dtype=torch.bool, device=env.device
     )
+    env._task458_release_latched = torch.zeros(
+        count, dtype=torch.bool, device=env.device
+    )
     env._task458_takeout_metrics = None
     env._task458_neighbor_baselines = {
         name: asset.data.root_pose_w.clone()
@@ -110,6 +113,7 @@ def reset_takeout_metric_state(env, env_ids, target_name: str) -> None:
     env._task458_last_tcp_relative_pos[ids] = float("nan")
     env._task458_grasp_stable_count[ids] = 0
     env._task458_grasp_latched[ids] = False
+    env._task458_release_latched[ids] = False
     for name, baseline in env._task458_neighbor_baselines.items():
         baseline[ids] = env.scene[name].data.root_pose_w[ids].clone()
     env._task458_takeout_metrics = None
@@ -156,6 +160,7 @@ def _takeout_metrics(
 
     gripper_index = robot.joint_names.index(gripper_joint_name)
     gripper_closed = robot.data.joint_pos[:, gripper_index] >= gripper_close_threshold
+    gripper_open = ~gripper_closed
     lower = torch.tensor(tcp_envelope_min_m, device=env.device)
     upper = torch.tensor(tcp_envelope_max_m, device=env.device)
     inside_gripper = torch.logical_and(
@@ -219,10 +224,21 @@ def _takeout_metrics(
         ) & (rotation_error <= neighbor_rotation_tolerance_rad)
 
     task_success_value = held_current & target_outside_shelf & neighbors_static
+    # This is a MimicGen subtask boundary signal, not the task-level success
+    # criterion. Keep it scoped to the target/gripper behavior so failed
+    # neighbor-static checks do not prevent source trajectory segmentation.
+    released_after_takeout = (
+        env._task458_grasp_latched
+        & target_outside_shelf
+        & gripper_open
+    )
+    env._task458_release_latched |= released_after_takeout
     metrics = {
         "step": step,
         "grasp_stable": env._task458_grasp_latched.clone(),
+        "released_after_takeout": env._task458_release_latched.clone(),
         "held_current": held_current,
+        "gripper_open": gripper_open,
         "target_outside_shelf": target_outside_shelf,
         "neighbors_static": neighbors_static,
         "task_success": task_success_value,
@@ -239,6 +255,11 @@ def _takeout_metrics(
 def grasp_stable(env, metric_params) -> torch.Tensor:
     """Latched grasp signal used only to split the Mimic source trajectory."""
     return _takeout_metrics(env, **metric_params)["grasp_stable"]
+
+
+def released_after_takeout(env, metric_params) -> torch.Tensor:
+    """Latched release signal used only to split the Mimic source trajectory."""
+    return _takeout_metrics(env, **metric_params)["released_after_takeout"]
 
 
 def held_current(env, metric_params) -> torch.Tensor:

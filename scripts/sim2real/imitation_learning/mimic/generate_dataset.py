@@ -109,6 +109,10 @@ def main():
     if task_name:
         task_name = args_cli.task.split(":")[-1]
     env_name = task_name or get_env_name_from_dataset(args_cli.input_file)
+    if not task_name and "-Mimic-Seed-" in env_name:
+        generation_env_name = env_name.replace("-Mimic-Seed-", "-Mimic-Generate-")
+        if generation_env_name in gym.registry:
+            env_name = generation_env_name
 
     # Configure environment
     env_cfg, success_term = setup_env_config(

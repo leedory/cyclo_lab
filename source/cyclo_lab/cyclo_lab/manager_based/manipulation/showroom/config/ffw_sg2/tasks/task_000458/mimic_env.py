@@ -113,6 +113,64 @@ class Task000458MimicEnv(FFWSG2MimicEnv):
         self._finish_episode_reset(env_ids)
         return self.obs_buf, extras
 
+    def _ensure_generation_success_tracking_buffers(self) -> None:
+        if hasattr(self, "_task458_generation_grasp_stable"):
+            return
+        self._task458_generation_grasp_stable = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._task458_generation_released_after_takeout = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._task458_generation_final_target_outside_shelf = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+
+    def reset_generation_success_tracking(self, env_id: int, success_term=None) -> None:
+        """Reset the Task458 generation-only episode success tracker."""
+        self._ensure_generation_success_tracking_buffers()
+        index = int(env_id)
+        self._task458_generation_grasp_stable[index] = False
+        self._task458_generation_released_after_takeout[index] = False
+        self._task458_generation_final_target_outside_shelf[index] = False
+
+    def update_generation_success_tracking(self, env_id: int, success_term=None) -> bool:
+        """Track subtask milestones with OR and final target-outside state.
+
+        The generated episode is successful when:
+        grasp_stable_ever AND released_after_takeout_ever AND final_target_outside_shelf.
+        """
+        self._ensure_generation_success_tracking_buffers()
+        index = int(env_id)
+        metric_params = self.cfg.seed_success_metric_params
+        success_params = getattr(success_term, "params", None) or {}
+        if "metric_params" in success_params:
+            metric_params = success_params["metric_params"]
+        metrics = takeout_terms._takeout_metrics(self, **metric_params)
+        self._task458_generation_grasp_stable[index] = (
+            self._task458_generation_grasp_stable[index]
+            | metrics["grasp_stable"][index]
+        )
+        self._task458_generation_released_after_takeout[index] = (
+            self._task458_generation_released_after_takeout[index]
+            | metrics["released_after_takeout"][index]
+        )
+        self._task458_generation_final_target_outside_shelf[index] = metrics[
+            "target_outside_shelf"
+        ][index]
+        return self.get_generation_success(env_id=index)
+
+    def get_generation_success(self, env_id: int, success_term=None) -> bool:
+        """Return Task458 generation success for the current episode."""
+        self._ensure_generation_success_tracking_buffers()
+        index = int(env_id)
+        success = (
+            self._task458_generation_grasp_stable[index]
+            & self._task458_generation_released_after_takeout[index]
+            & self._task458_generation_final_target_outside_shelf[index]
+        )
+        return bool(success.item())
+
     def target_eef_pose_to_action(
         self,
         target_eef_pose_dict: dict,

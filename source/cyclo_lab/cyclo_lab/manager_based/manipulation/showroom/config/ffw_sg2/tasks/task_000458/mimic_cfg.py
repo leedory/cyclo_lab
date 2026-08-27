@@ -47,6 +47,7 @@ class Task458MimicObservationsCfg(EpisodicShowroomObservationsCfg):
     @configclass
     class SubtaskCfg(ObsGroup):
         grasp_stable = None
+        released_after_takeout = None
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -83,6 +84,10 @@ class Task000458MimicSeedEnvCfg(Task000458EnvCfg, MimicEnvCfg):
             func=takeout_terms.grasp_stable,
             params={"metric_params": params},
         )
+        self.observations.subtask_terms.released_after_takeout = ObsTerm(
+            func=takeout_terms.released_after_takeout,
+            params={"metric_params": params},
+        )
         self.terminations.success = DoneTerm(
             func=takeout_terms.takeout_success,
             params={"metric_params": params},
@@ -114,12 +119,12 @@ class Task000458MimicSeedEnvCfg(Task000458EnvCfg, MimicEnvCfg):
                 num_interpolation_steps=10,
                 num_fixed_steps=0,
                 apply_noise_during_interpolation=False,
-                description=f"Approach and grasp {self.target_object}",
-                next_subtask_description="Pull the packet out of the shelf",
+                description=f"Approach {self.target_object} and close the gripper",
+                next_subtask_description=f"Pull {self.target_object} out of the shelf and release it",
             ),
             SubTaskConfig(
                 object_ref=self.target_object,
-                subtask_term_signal=None,
+                subtask_term_signal="released_after_takeout",
                 subtask_term_offset_range=(0, 0),
                 selection_strategy="nearest_neighbor_object",
                 selection_strategy_kwargs={"nn_k": 3},
@@ -127,7 +132,20 @@ class Task000458MimicSeedEnvCfg(Task000458EnvCfg, MimicEnvCfg):
                 num_interpolation_steps=10,
                 num_fixed_steps=0,
                 apply_noise_during_interpolation=False,
-                description=f"Pull {self.target_object} toward the robot",
+                description=f"Pull {self.target_object} out of the shelf and release it",
+                next_subtask_description="Return the right arm to the initial pose",
+            ),
+            SubTaskConfig(
+                object_ref=None,
+                subtask_term_signal=None,
+                subtask_term_offset_range=(0, 0),
+                selection_strategy="random",
+                selection_strategy_kwargs={},
+                action_noise=0.0,
+                num_interpolation_steps=10,
+                num_fixed_steps=0,
+                apply_noise_during_interpolation=False,
+                description="Return the right arm to the initial pose",
                 next_subtask_description="Task complete",
             ),
         ]

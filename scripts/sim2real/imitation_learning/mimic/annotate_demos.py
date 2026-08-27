@@ -243,7 +243,7 @@ def main():
     env_cfg.recorders.dataset_filename = output_file_name
 
     # create environment from loaded config
-    env: ManagerBasedRLMimicEnv = gym.make(args_cli.task, cfg=env_cfg).unwrapped
+    env: ManagerBasedRLMimicEnv = gym.make(env_name, cfg=env_cfg).unwrapped
 
     if not isinstance(env, ManagerBasedRLMimicEnv):
         raise ValueError("The environment should be derived from ManagerBasedRLMimicEnv")
