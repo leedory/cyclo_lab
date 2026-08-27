@@ -12,13 +12,15 @@ FFW_SG2_OVERHEAD_RIGHT_CAMERA_NAME = "cam_overhead_right"
 
 FFW_SG2_HEAD_CAMERA_HEIGHT = 720
 FFW_SG2_HEAD_CAMERA_WIDTH = 1280
-FFW_SG2_WRIST_CAMERA_HEIGHT = 480
-FFW_SG2_WRIST_CAMERA_WIDTH = 640
+FFW_SG2_WRIST_CAMERA_HEIGHT = 640
+FFW_SG2_WRIST_CAMERA_WIDTH = 480
 FFW_SG2_OVERHEAD_CAMERA_HEIGHT = 512
 FFW_SG2_OVERHEAD_CAMERA_WIDTH = 512
 
-# Align ROS optical +Z with link +X, then roll the image -90 degrees about that optical axis.
-FFW_SG2_D405_CAMERA_OPTICAL_ROT = (0.5, -0.5, 0.5, -0.5)
+# Align ROS optical +Z with link +X while keeping the rendered image upright.
+# The portrait 480x640 raster is the quarter-turned form of the native sideways
+# 640x480 image, preserving its full framing without downstream rotation.
+FFW_SG2_D405_CAMERA_UPRIGHT_ROT = (0.7071068, 0.0, 0.7071068, 0.0)
 FFW_SG2_CAMERA_HORIZONTAL_APERTURE = 20.955
 FFW_SG2_OVERHEAD_LEFT_CAMERA_POS = (-0.10, 0.40, 1.8)
 FFW_SG2_OVERHEAD_LEFT_CAMERA_ROT = (0.8535534, 0.1464466, 0.3535534, -0.3535534)
@@ -146,7 +148,7 @@ def make_ffw_sg2_wrist_camera_cfg(
         ),
         offset=CameraCfg.OffsetCfg(
             pos=(0.0, 0.0, 0.0),
-            rot=FFW_SG2_D405_CAMERA_OPTICAL_ROT,
+            rot=FFW_SG2_D405_CAMERA_UPRIGHT_ROT,
             convention="ros",
         ),
     )

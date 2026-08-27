@@ -35,7 +35,9 @@ OPERATOR_CAMERA_ROWS = (
         ("cam_wrist_right", "Wrist Right"),
     ),
 )
-OPERATOR_CAMERA_ROTATIONS = (("cam_wrist_left", 1), ("cam_wrist_right", 1))
+# SG2 wrist cameras render upright at the sensor, so downstream views must not
+# rotate their RGB observations.
+OPERATOR_CAMERA_ROTATIONS = ()
 
 
 @configclass

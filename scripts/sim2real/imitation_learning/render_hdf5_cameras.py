@@ -23,7 +23,9 @@ import numpy as np
 
 
 DEFAULT_CAMERAS = ("cam_head", "cam_wrist_left", "cam_wrist_right")
-DEFAULT_ROTATIONS = {"cam_wrist_left": 1, "cam_wrist_right": 1}
+# New SG2 recordings are upright in the raw camera observation. Keep rotation
+# opt-in so legacy sideways datasets can still be previewed with --rotation.
+DEFAULT_ROTATIONS: dict[str, int] = {}
 DEFAULT_LABELS = {
     "cam_head": "Head",
     "cam_wrist_left": "Wrist Left",

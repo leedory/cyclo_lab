@@ -78,15 +78,17 @@ def apply_sg2_showroom_camera_profile(env_cfg, profile_name: str) -> None:
     env_cfg.scene.cam_wrist_left = make_ffw_sg2_wrist_camera_cfg(
         "left",
         update_period=0.0,
-        width=wrist_left.width,
-        height=wrist_left.height,
+        # The physical profile describes the sideways native 640x480 stream.
+        # Swap its raster axes so the simulator emits the upright 480x640 frame.
+        width=wrist_left.height,
+        height=wrist_left.width,
         intrinsic_matrix=wrist_left.intrinsic_matrix,
     )
     env_cfg.scene.cam_wrist_right = make_ffw_sg2_wrist_camera_cfg(
         "right",
         update_period=0.0,
-        width=wrist_right.width,
-        height=wrist_right.height,
+        width=wrist_right.height,
+        height=wrist_right.width,
         intrinsic_matrix=wrist_right.intrinsic_matrix,
     )
 

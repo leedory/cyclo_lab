@@ -317,6 +317,13 @@ python scripts/sim2real/imitation_learning/render_hdf5_cameras.py \
     --overwrite
 ```
 
+SG2 wrist-camera RGB is rendered and recorded upright at 480x640 (portrait),
+the true quarter-turned form of the native sideways 640x480 frame. New datasets
+therefore require no image rotation. To preview a legacy dataset recorded with
+sideways wrist frames, explicitly add `--rotation cam_wrist_left=1 --rotation
+cam_wrist_right=1` (quarter turns counter-clockwise); this only affects the
+preview and does not rewrite the dataset.
+
 For raw seed recording with reset-time randomization, use
 `Cyclo-Real-Showroom-Task000458-Random-FFW-SG2-v0`. Its
 `TASK000458_RECORD_RANDOM` profile is wired to both the SG2 root and the selected
