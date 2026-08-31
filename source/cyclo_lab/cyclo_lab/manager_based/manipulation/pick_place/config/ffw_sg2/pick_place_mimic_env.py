@@ -85,14 +85,14 @@ class FFWSG2PickPlaceMimicEnv(FFWSG2MimicEnv):
                 head_action = joint_pos_target[16:18]
 
             # Concatenate full 19D action:
-            # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), lift(1), head(2)]
+            # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
             action = torch.cat([
                 left_pose_action,     # 1-7: left arm (keep current)
                 left_gripper_action,  # 8: left gripper (keep current)
                 right_pose_action,      # 9-15: right arm (Mimic controlled)
                 right_gripper_action,      # 16: right gripper (keep current)
-                lift_action,           # 17: lift (keep current)
-                head_action            # 18-19: head (keep current)
+                head_action,           # 17-18: head (keep current)
+                lift_action            # 19: lift (keep current)
             ], dim=0)
 
             result = action.unsqueeze(0)
@@ -127,14 +127,14 @@ class FFWSG2PickPlaceMimicEnv(FFWSG2MimicEnv):
                 head_action = joint_pos_target[16:18]
 
             # Concatenate full 19D action:
-            # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), lift(1), head(2)]
+            # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
             action = torch.cat([
                 left_pose_action,     # 1-7: left arm (Mimic controlled)
                 left_gripper_action,  # 8: left gripper (Mimic controlled)
                 right_pose_action,      # 9-15: right arm (keep current)
                 right_gripper_action,      # 16: right gripper (keep current)
-                lift_action,           # 17: lift (keep current)
-                head_action            # 18-19: head (keep current)
+                head_action,           # 17-18: head (keep current)
+                lift_action            # 19: lift (keep current)
             ], dim=0)
 
             result = action.unsqueeze(0)
@@ -144,7 +144,7 @@ class FFWSG2PickPlaceMimicEnv(FFWSG2MimicEnv):
         eef_name = list(self.cfg.subtask_configs.keys())[0]
 
         # For FFW-SG2, use right arm as primary manipulator
-        # Action format from IK conversion: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), lift(1), head(2)]
+        # Action format: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
         # We return only the right arm EEF pose (indices 8-14)
         if "right" in eef_name.lower():
             target_eef_pos = action[:, 8:11]    # Right arm position
@@ -168,7 +168,7 @@ class FFWSG2PickPlaceMimicEnv(FFWSG2MimicEnv):
         eef_name = list(self.cfg.subtask_configs.keys())[0]
 
         # For FFW-SG2, return right gripper (index 15)
-        # Action format: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), lift(1), head(2)]
+        # Action format: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
         if "right" in eef_name.lower():
             target_gripper_action = actions[:, 15:16]
         elif "left" in eef_name.lower():

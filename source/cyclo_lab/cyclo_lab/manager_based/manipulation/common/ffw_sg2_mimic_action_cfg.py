@@ -40,9 +40,9 @@ def configure_ffw_sg2_mimic_ik_actions(actions) -> None:
     actions.gripper_r_action = make_ffw_sg2_joint_position_action_cfg(
         FFW_SG2_RIGHT_GRIPPER_JOINT_NAMES
     )
-    actions.lift_action = make_ffw_sg2_joint_position_action_cfg(
-        FFW_SG2_LIFT_JOINT_NAMES
-    )
     actions.head_action = make_ffw_sg2_joint_position_action_cfg(
         FFW_SG2_HEAD_JOINT_NAMES
+    )
+    actions.lift_action = make_ffw_sg2_joint_position_action_cfg(
+        FFW_SG2_LIFT_JOINT_NAMES
     )

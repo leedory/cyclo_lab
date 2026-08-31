@@ -16,9 +16,9 @@ ACTION_DIM = 19
 INACTIVE_JOINT_NAMES = (
     *(f"arm_l_joint{index}" for index in range(1, 8)),
     "gripper_l_joint1",
-    "lift_joint",
     "head_joint1",
     "head_joint2",
+    "lift_joint",
 )
 INACTIVE_ACTION_INDICES = (*range(0, 8), *range(16, 19))
 RIGHT_MIMIC_ACTION_INDICES = tuple(range(8, 16))

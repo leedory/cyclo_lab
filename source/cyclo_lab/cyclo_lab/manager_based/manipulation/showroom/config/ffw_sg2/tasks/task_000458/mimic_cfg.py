@@ -160,11 +160,11 @@ class Task000458MimicSeedEnvCfg(Task000458EnvCfg, MimicEnvCfg):
                 self.actions.gripper_l_action = make_ffw_sg2_joint_position_action_cfg(
                     FFW_SG2_LEFT_GRIPPER_JOINT_NAMES
                 )
-                self.actions.lift_action = make_ffw_sg2_joint_position_action_cfg(
-                    FFW_SG2_LIFT_JOINT_NAMES
-                )
                 self.actions.head_action = make_ffw_sg2_joint_position_action_cfg(
                     FFW_SG2_HEAD_JOINT_NAMES
+                )
+                self.actions.lift_action = make_ffw_sg2_joint_position_action_cfg(
+                    FFW_SG2_LIFT_JOINT_NAMES
                 )
             return
         super().init_action_cfg(mode)

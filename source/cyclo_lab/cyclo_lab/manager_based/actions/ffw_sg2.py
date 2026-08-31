@@ -66,11 +66,11 @@ class FFWSG2JointPositionActionsCfg:
     gripper_r_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
         FFW_SG2_RIGHT_GRIPPER_JOINT_NAMES
     )
-    lift_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
-        FFW_SG2_LIFT_JOINT_NAMES
-    )
     head_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
         FFW_SG2_HEAD_JOINT_NAMES
+    )
+    lift_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
+        FFW_SG2_LIFT_JOINT_NAMES
     )
 
 

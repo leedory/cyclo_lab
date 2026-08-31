@@ -58,22 +58,10 @@ ROBOT_CONFIGS = {
 
 
 def _ffw_sg2_action_to_lerobot(actions: np.ndarray) -> np.ndarray:
-    """Convert Isaac Lab SG2 actions into the published/LeRobot joint order."""
+    """Validate the already-canonical SG2 action order without reordering it."""
     if actions.ndim != 2 or actions.shape[1] != 19:
         raise ValueError(f"FFW_SG2 actions must have shape [N, 19], got {tuple(actions.shape)}.")
-
-    # HDF5 actions follow Isaac Lab action-term order:
-    # [arm_l, gripper_l, arm_r, gripper_r, lift, head(2)].
-    # WoodBlock LeRobot datasets use:
-    # [arm_l, gripper_l, arm_r, gripper_r, head(2), lift].
-    return np.concatenate(
-        [
-            actions[:, :16],
-            actions[:, 17:19],
-            actions[:, 16:17],
-        ],
-        axis=-1,
-    )
+    return actions
 
 
 def get_env_features(fps: int, robot_type: str, camera_shapes: dict[str, dict[str, int]] | None = None):

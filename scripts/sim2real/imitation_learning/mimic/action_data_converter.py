@@ -49,7 +49,7 @@ def convert_joint_to_ik_omy(ep_data: EpisodeData) -> EpisodeData:
         raise ValueError(f"Failed to convert joint to IK for OMY: {str(e)}")
 
 def convert_joint_to_ik_ffw_sg2(ep_data: EpisodeData) -> EpisodeData:
-    """Convert joint actions to IK (EEF state + gripper + lift + head) for FFW SG2 robot."""
+    """Convert joint actions to IK (EEF state + gripper + head + lift) for FFW SG2 robot."""
     try:
         # FFW SG2 has dual arms, need to handle both left and right EEF states
         left_eef_pose = ep_data.data["obs"]["left_eef_pose"]
@@ -57,21 +57,21 @@ def convert_joint_to_ik_ffw_sg2(ep_data: EpisodeData) -> EpisodeData:
         joint_actions = ep_data.data["actions"]
 
         # FFW SG2 joint action order (total 19):
-        # [arm_l(7), gripper_l(1), arm_r(7), gripper_r(1), lift(1), head(2)]
+        # [arm_l(7), gripper_l(1), arm_r(7), gripper_r(1), head(2), lift(1)]
         gripper_l_action = joint_actions[:, 7:8]  # Index 7: gripper_l_joint1
         gripper_r_action = joint_actions[:, 15:16]  # Index 15: gripper_r_joint1
-        lift_action = joint_actions[:, 16:17]       # Index 16: lift_joint
-        head_action = joint_actions[:, 17:19]       # Index 17-18: head_joint[1-2]
+        head_action = joint_actions[:, 16:18]       # Indices 16-17: head joints
+        lift_action = joint_actions[:, 18:19]       # Index 18: lift joint
 
         # IK action order (total 19):
-        # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), lift(1), head(2)]
+        # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
         new_actions = torch.cat([
             left_eef_pose,    # 0-6: left EEF (pos + quat)
             gripper_l_action,  # 7: left gripper
             right_eef_pose,   # 8-14: right EEF (pos + quat)
             gripper_r_action,  # 15: right gripper
-            lift_action,        # 16: lift joint
-            head_action       # 17-18: head joints
+            head_action,       # 16-17: head joints
+            lift_action        # 18: lift joint
         ], dim=1)
 
         ep_data.data["actions"] = new_actions
@@ -98,18 +98,8 @@ def convert_ik_to_joint(ep_data: EpisodeData, robot_type: str | None = None) -> 
                     "FFW_SG2 joint_pos_target must have shape [N, 19] before converting to joint actions. "
                     f"Got {tuple(joint_targets.shape)}."
                 )
-            # joint_pos_target observation follows the published observation order:
+            # joint_pos_target and Isaac Lab actions share the canonical order:
             # [arm_l, gripper_l, arm_r, gripper_r, head(2), lift(1)].
-            # Isaac Lab action tensors expect:
-            # [arm_l, gripper_l, arm_r, gripper_r, lift(1), head(2)].
-            joint_targets = torch.cat(
-                [
-                    joint_targets[:, :16],
-                    joint_targets[:, 18:19],
-                    joint_targets[:, 16:18],
-                ],
-                dim=1,
-            )
         ep_data.data["actions"] = joint_targets
         return ep_data
     except (KeyError, IndexError, TypeError) as e:
