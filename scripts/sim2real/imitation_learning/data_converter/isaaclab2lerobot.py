@@ -34,6 +34,7 @@ if _CYCLO_LAB_SOURCE.is_dir():
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_PUBLISHED_JOINT_NAMES
+from hdf5_task_metadata import is_task_hdf
 
 ROBOT_CONFIGS = {
     "OMY": {
@@ -306,6 +307,15 @@ def convert_isaaclab_to_lerobot(
     """
     Convert an IsaacLab HDF5 dataset into LeRobot dataset format.
     """
+    with h5py.File(dataset_file, "r") as source_hdf:
+        if is_task_hdf(source_hdf["data"], 458):
+            raise RuntimeError(
+                "Task458 conversion is refused by the generic isaaclab2lerobot "
+                "converter: raw Mimic actions are hybrid EEF/joint commands, not "
+                "absolute joint targets, and same-row state/action alignment is "
+                "invalid. Use the Cyclo Intelligence v3 adapter, which enforces "
+                "joint_pos[:-1] -> joint_pos_target[1:] causal alignment."
+            )
     hdf5_files = [dataset_file]
     now_episode_index = 0
     camera_shapes = _infer_camera_shapes_from_hdf5(dataset_file, robot_type)
