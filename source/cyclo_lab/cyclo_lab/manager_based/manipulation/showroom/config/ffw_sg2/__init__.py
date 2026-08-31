@@ -66,3 +66,25 @@ gym.register(
     },
     disable_env_checker=True,
 )
+
+gym.register(
+    id="Cyclo-Real-Showroom-Task000525-FFW-SG2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.tasks.task_000525.env_cfg:Task000525EnvCfg"
+        ),
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Cyclo-Real-Showroom-Task000525-Random-FFW-SG2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.tasks.task_000525.env_cfg:Task000525RandomEnvCfg"
+        ),
+    },
+    disable_env_checker=True,
+)
