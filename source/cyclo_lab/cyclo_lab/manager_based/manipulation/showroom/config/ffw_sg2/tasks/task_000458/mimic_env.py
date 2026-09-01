@@ -9,6 +9,7 @@ import isaaclab.utils.math as PoseUtils
 
 from cyclo_lab.manager_based.manipulation.common import FFWSG2MimicEnv
 
+from ...platform.replay_state import prepare_sg2_position_replay_state
 from . import takeout_terms
 
 
@@ -108,7 +109,10 @@ class Task000458MimicEnv(FFWSG2MimicEnv):
 
     def reset_to(self, state, env_ids, seed=None, is_relative=False):
         _, extras = super().reset_to(
-            state, env_ids, seed=seed, is_relative=is_relative
+            prepare_sg2_position_replay_state(state),
+            env_ids,
+            seed=seed,
+            is_relative=is_relative,
         )
         self._finish_episode_reset(env_ids)
         return self.obs_buf, extras
