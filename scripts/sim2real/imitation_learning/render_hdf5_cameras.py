@@ -174,6 +174,7 @@ def _render_episode(
     rotations: Mapping[str, int],
     fps: float,
     panel_width: int,
+    read_batch_size: int,
     overwrite: bool,
 ) -> EpisodePreview:
     if output_path.exists() and not overwrite:
@@ -211,30 +212,36 @@ def _render_episode(
 
     try:
         writer.send(None)
-        for frame_index in range(frame_count):
-            canvas = _compose_frame(
-                [dataset[frame_index] for dataset in datasets],
-                camera_names,
-                labels=labels,
-                panel_width=panel_width,
-                rotations=rotations,
-                content_height=content_height,
-                label_height=label_height,
-                gap=gap,
-                frame_index=frame_index,
-                frame_count=frame_count,
-            )
-            if canvas.shape[1] != output_width or canvas.shape[0] != output_height:
-                canvas = cv2.copyMakeBorder(
-                    canvas,
-                    0,
-                    output_height - canvas.shape[0],
-                    0,
-                    output_width - canvas.shape[1],
-                    cv2.BORDER_CONSTANT,
-                    value=(18, 18, 18),
+        # Reading one compressed HDF5 image at a time is extremely slow for
+        # camera-heavy episodes. Pull a modest sequential batch from each
+        # camera, then compose frames from memory.
+        for batch_start in range(0, frame_count, read_batch_size):
+            batch_stop = min(batch_start + read_batch_size, frame_count)
+            camera_batches = [dataset[batch_start:batch_stop] for dataset in datasets]
+            for batch_offset, frame_index in enumerate(range(batch_start, batch_stop)):
+                canvas = _compose_frame(
+                    [batch[batch_offset] for batch in camera_batches],
+                    camera_names,
+                    labels=labels,
+                    panel_width=panel_width,
+                    rotations=rotations,
+                    content_height=content_height,
+                    label_height=label_height,
+                    gap=gap,
+                    frame_index=frame_index,
+                    frame_count=frame_count,
                 )
-            writer.send(canvas)
+                if canvas.shape[1] != output_width or canvas.shape[0] != output_height:
+                    canvas = cv2.copyMakeBorder(
+                        canvas,
+                        0,
+                        output_height - canvas.shape[0],
+                        0,
+                        output_width - canvas.shape[1],
+                        cv2.BORDER_CONSTANT,
+                        value=(18, 18, 18),
+                    )
+                writer.send(canvas)
     except Exception:
         writer.close()
         temporary_path.unlink(missing_ok=True)
@@ -308,6 +315,7 @@ def render_dataset(
     labels: Mapping[str, str] = DEFAULT_LABELS,
     fps: float = 15.0,
     panel_width: int = 480,
+    read_batch_size: int = 32,
     overwrite: bool = False,
 ) -> Path:
     """Render every episode and return the generated HTML index path."""
@@ -320,6 +328,8 @@ def render_dataset(
         raise ValueError(f"FPS must be positive, got {fps}.")
     if panel_width <= 0:
         raise ValueError(f"Panel width must be positive, got {panel_width}.")
+    if read_batch_size <= 0:
+        raise ValueError(f"Read batch size must be positive, got {read_batch_size}.")
 
     output_dir = (
         Path(output_dir).expanduser().resolve()
@@ -354,6 +364,7 @@ def render_dataset(
                 rotations=rotations,
                 fps=fps,
                 panel_width=panel_width,
+                read_batch_size=read_batch_size,
                 overwrite=overwrite,
             )
             previews.append(preview)
@@ -380,6 +391,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fps", type=float, default=15.0, help="Preview playback frame rate (default: 15).")
     parser.add_argument("--panel-width", type=int, default=480, help="Width of each camera panel (default: 480).")
+    parser.add_argument(
+        "--read-batch-size",
+        type=int,
+        default=32,
+        help="Sequential HDF5 frames loaded per camera read (default: 32).",
+    )
     parser.add_argument(
         "--cameras",
         nargs="+",
@@ -410,6 +427,7 @@ def main() -> int:
             rotations=rotations,
             fps=args.fps,
             panel_width=args.panel_width,
+            read_batch_size=args.read_batch_size,
             overwrite=args.overwrite,
         )
     except (FileNotFoundError, FileExistsError, ValueError, RuntimeError) as exc:
