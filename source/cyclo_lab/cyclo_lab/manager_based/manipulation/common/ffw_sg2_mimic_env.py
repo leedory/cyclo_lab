@@ -13,6 +13,9 @@ from isaaclab.envs import ManagerBasedRLMimicEnv, ManagerBasedRLEnvCfg
 class FFWSG2MimicEnv(ManagerBasedRLMimicEnv):
     """Task-neutral Isaac Lab Mimic adapter for the dual-arm FFW SG2 robot."""
 
+    UPPER_BODY_ACTION_DIM = 19
+    MOBILE_ACTION_DIM = 22
+
     def __init__(self, cfg: ManagerBasedRLEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
         self.robot_root_pos = self.scene['robot'].data.root_pos_w
@@ -80,7 +83,9 @@ class FFWSG2MimicEnv(ManagerBasedRLMimicEnv):
                 lift_action = joint_pos_target[18:19]
                 head_action = joint_pos_target[16:18]
 
-            # Concatenate full 19D action:
+            # Concatenate the 19D upper-body portion. Mobile tasks append a
+            # zero body command below: navigation is owned by locomanipulation
+            # SDG, not by Isaac Lab Mimic's EEF trajectory API.
             # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
             action = torch.cat([
                 left_pose_action,     # 1-7: left arm (keep current)
@@ -91,7 +96,7 @@ class FFWSG2MimicEnv(ManagerBasedRLMimicEnv):
                 lift_action            # 19: lift (keep current)
             ], dim=0)
 
-            result = action.unsqueeze(0)
+            result = self._finalize_action(action)
         elif "left" in eef_name.lower():
             target_left_eef_pose = target_eef_pose_dict[eef_name]
             left_gripper_action = gripper_action_dict[eef_name]
@@ -122,7 +127,8 @@ class FFWSG2MimicEnv(ManagerBasedRLMimicEnv):
                 lift_action = joint_pos_target[18:19]
                 head_action = joint_pos_target[16:18]
 
-            # Concatenate full 19D action:
+            # Concatenate the 19D upper-body portion. Mobile tasks append a
+            # zero body command below.
             # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
             action = torch.cat([
                 left_pose_action,     # 1-7: left arm (Mimic controlled)
@@ -133,14 +139,37 @@ class FFWSG2MimicEnv(ManagerBasedRLMimicEnv):
                 lift_action            # 19: lift (keep current)
             ], dim=0)
 
-            result = action.unsqueeze(0)
+            result = self._finalize_action(action)
         return result
+
+    def _finalize_action(self, upper_body_action: torch.Tensor) -> torch.Tensor:
+        """Return the action width required by this environment.
+
+        The shared adapter remains compatible with stationary 19D tasks. A
+        Task525-style environment retains its configured 3D base action, so
+        the same EEF adapter returns ``upper_body19 + [0, 0, 0]``. The zeros
+        are deliberate: Mimic generates pick/place arm motion, while the
+        locomanipulation SDG state machine generates base motion.
+        """
+
+        action_dim = int(self.action_manager.total_action_dim)
+        if action_dim == self.UPPER_BODY_ACTION_DIM:
+            action = upper_body_action
+        elif action_dim == self.MOBILE_ACTION_DIM:
+            action = torch.cat((upper_body_action, upper_body_action.new_zeros(3)), dim=0)
+        else:
+            raise ValueError(
+                "FFW SG2 Mimic expects a 19D stationary or 22D mobile action contract, "
+                f"got {action_dim}D."
+            )
+        return action.unsqueeze(0)
 
     def action_to_target_eef_pose(self, action: torch.Tensor) -> dict[str, torch.Tensor]:
         eef_name = list(self.cfg.subtask_configs.keys())[0]
 
         # For FFW-SG2, use right arm as primary manipulator
-        # Action format from IK conversion: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
+        # Action prefix: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
+        # A mobile action may append [vx, vy, wz], which is intentionally ignored here.
         # We return only the right arm EEF pose (indices 8-14)
         if "right" in eef_name.lower():
             target_eef_pos = action[:, 8:11]    # Right arm position
@@ -164,7 +193,7 @@ class FFWSG2MimicEnv(ManagerBasedRLMimicEnv):
         eef_name = list(self.cfg.subtask_configs.keys())[0]
 
         # For FFW-SG2, return right gripper (index 15)
-        # Action format: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
+        # Action prefix: [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
         if "right" in eef_name.lower():
             target_gripper_action = actions[:, 15:16]
         elif "left" in eef_name.lower():

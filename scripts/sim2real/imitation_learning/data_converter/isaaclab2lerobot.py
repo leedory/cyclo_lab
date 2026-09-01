@@ -20,6 +20,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import h5py
+import json
 import numpy as np
 import argparse
 import sys
@@ -33,7 +34,10 @@ if _CYCLO_LAB_SOURCE.is_dir():
     sys.path.insert(0, str(_CYCLO_LAB_SOURCE))
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_PUBLISHED_JOINT_NAMES
+from cyclo_lab.robot_specs.ffw.sg2 import (
+    FFW_SG2_MOBILE_ACTION_NAMES,
+    FFW_SG2_PUBLISHED_JOINT_NAMES,
+)
 from hdf5_task_metadata import is_task_hdf
 
 ROBOT_CONFIGS = {
@@ -60,29 +64,92 @@ ROBOT_CONFIGS = {
 
 def _ffw_sg2_action_to_lerobot(actions: np.ndarray) -> np.ndarray:
     """Validate the already-canonical SG2 action order without reordering it."""
-    if actions.ndim != 2 or actions.shape[1] != 19:
-        raise ValueError(f"FFW_SG2 actions must have shape [N, 19], got {tuple(actions.shape)}.")
+    if actions.ndim != 2 or actions.shape[1] not in (19, 22):
+        raise ValueError(f"FFW_SG2 actions must have shape [N, 19|22], got {tuple(actions.shape)}.")
     return actions
 
 
-def get_env_features(fps: int, robot_type: str, camera_shapes: dict[str, dict[str, int]] | None = None):
+def _decode_hdf5_names(value) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid HDF5 feature-name JSON: {value!r}") from exc
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    return tuple(item.decode("utf-8") if isinstance(item, bytes) else str(item) for item in value)
+
+
+def _infer_ffw_sg2_feature_names(dataset_file: str) -> tuple[str, ...]:
+    """Infer and strictly validate the 19D or 22D SG2 public contract."""
+    with h5py.File(dataset_file, "r") as hdf:
+        if "data" not in hdf or not hdf["data"].keys():
+            raise ValueError("HDF5 has no data episodes")
+        data = hdf["data"]
+        first_demo = data[next(iter(data.keys()))]
+        contract_id = data.attrs.get("robot_contract_id", "")
+        if isinstance(contract_id, bytes):
+            contract_id = contract_id.decode("utf-8")
+        action_representation = data.attrs.get("action_representation", "")
+        if isinstance(action_representation, bytes):
+            action_representation = action_representation.decode("utf-8")
+        normalized_contract_id = str(contract_id).casefold()
+        normalized_representation = str(action_representation).casefold()
+        is_sdg_eef = (
+            "eef" in normalized_contract_id
+            or normalized_representation in {"ik", "eef"}
+            or (
+                "locomanipulation_sdg_output_data" in first_demo
+                and str(contract_id) != "ffw_sg2_rev1_mobile_22d_v1"
+            )
+        )
+        if is_sdg_eef:
+            raise RuntimeError(
+                "FFW SG2 dataset uses IK/EEF-pose actions; convert it to an explicit "
+                "joint19[/base3] policy contract before LeRobot export"
+            )
+        action_dim = int(first_demo["actions"].shape[-1])
+        if action_dim == 19:
+            expected = tuple(FFW_SG2_PUBLISHED_JOINT_NAMES)
+        elif action_dim == 22:
+            expected = tuple(FFW_SG2_MOBILE_ACTION_NAMES)
+        else:
+            raise ValueError(f"Unsupported FFW_SG2 action dimension: {action_dim}")
+        declared = _decode_hdf5_names(data.attrs.get("action_names"))
+        if declared and declared != expected:
+            raise ValueError(f"FFW_SG2 action_names mismatch: {declared} != {expected}")
+        return expected
+
+
+def get_env_features(
+    fps: int,
+    robot_type: str,
+    camera_shapes: dict[str, dict[str, int]] | None = None,
+    feature_names: tuple[str, ...] | None = None,
+):
     if robot_type not in ROBOT_CONFIGS:
         raise ValueError(f"Unsupported robot type: {robot_type}")
     
     config = ROBOT_CONFIGS[robot_type]
+    feature_names = tuple(feature_names or config["joint_names"])
+    expected_dim = len(feature_names)
     camera_shapes = camera_shapes or {}
     
     # Build action and observation.state features
     features = {
         "action": {
             "dtype": "float32",
-            "shape": (config["expected_dim"],),
-            "names": config["joint_names"],
+            "shape": (expected_dim,),
+            "names": list(feature_names),
         },
         "observation.state": {
             "dtype": "float32",
-            "shape": (config["expected_dim"],),
-            "names": config["joint_names"],
+            "shape": (expected_dim,),
+            "names": list(feature_names),
         }
     }
     
@@ -229,6 +296,7 @@ def process_data(
     fps: int,
     resample_by_time: bool,
     robot_type: str,
+    feature_names: tuple[str, ...],
 ) -> bool:
     """
     Process a single demonstration group from the HDF5 dataset
@@ -238,6 +306,7 @@ def process_data(
         raise ValueError(f"Unsupported robot type: {robot_type}")
     
     config = ROBOT_CONFIGS[robot_type]
+    expected_dim = len(feature_names)
     camera_items = list(config["cameras"].items())
     
     try:
@@ -259,11 +328,22 @@ def process_data(
 
     # Ensure actions and joint positions are 2D arrays
     if actions.ndim == 1:
-        actions = actions.reshape(-1, config["expected_dim"])
+        actions = actions.reshape(-1, expected_dim)
     if joint_pos.ndim == 1:
-        joint_pos = joint_pos.reshape(-1, config["expected_dim"])
+        joint_dim = len(FFW_SG2_PUBLISHED_JOINT_NAMES) if robot_type == "FFW_SG2" else expected_dim
+        joint_pos = joint_pos.reshape(-1, joint_dim)
     if robot_type == "FFW_SG2":
         actions = _ffw_sg2_action_to_lerobot(actions)
+        if expected_dim == len(FFW_SG2_MOBILE_ACTION_NAMES):
+            if "obs/base_velocity_body" not in demo_group:
+                raise ValueError(f"Demo {demo_name} is 22D but has no obs/base_velocity_body")
+            base_velocity = np.asarray(demo_group["obs/base_velocity_body"], dtype=np.float32)
+            joint_pos = np.concatenate((joint_pos, base_velocity), axis=-1)
+    if actions.shape[1] != expected_dim or joint_pos.shape[1] != expected_dim:
+        raise ValueError(
+            f"Demo {demo_name} contract mismatch: action={actions.shape}, state={joint_pos.shape}, "
+            f"expected_dim={expected_dim}"
+        )
     
     total_state_frames = actions.shape[0]
 
@@ -318,6 +398,10 @@ def convert_isaaclab_to_lerobot(
             )
     hdf5_files = [dataset_file]
     now_episode_index = 0
+    if robot_type == "FFW_SG2":
+        feature_names = _infer_ffw_sg2_feature_names(dataset_file)
+    else:
+        feature_names = tuple(ROBOT_CONFIGS[robot_type]["joint_names"])
     camera_shapes = _infer_camera_shapes_from_hdf5(dataset_file, robot_type)
     if camera_shapes:
         shape_text = ", ".join(
@@ -330,7 +414,12 @@ def convert_isaaclab_to_lerobot(
         repo_id=repo_id,
         fps=fps,
         robot_type=robot_type,
-        features=get_env_features(fps, robot_type, camera_shapes=camera_shapes),
+        features=get_env_features(
+            fps,
+            robot_type,
+            camera_shapes=camera_shapes,
+            feature_names=feature_names,
+        ),
         root=root,
     )
 
@@ -344,7 +433,6 @@ def convert_isaaclab_to_lerobot(
             for demo_name in tqdm(demo_names, desc="Processing each demo"):
                 demo_group = f["data"][demo_name]
 
-                # Skip unsuccessful demonstrations
                 if "success" in demo_group.attrs and not demo_group.attrs["success"]:
                     print(f"Demo {demo_name} not successful, skipping...")
                     continue
@@ -359,6 +447,7 @@ def convert_isaaclab_to_lerobot(
                     fps,
                     resample_by_time,
                     robot_type,
+                    feature_names,
                 )
 
                 if valid:
