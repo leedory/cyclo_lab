@@ -13,7 +13,6 @@ from cyclo_lab.assets.environments.robotis_showroom import (
 
 from ...platform import observations as showroom_obs
 from ...platform.action_cfg import ContinuousShowroomActionsCfg
-from ...randomization.cfg import ShowroomRandomizationCfg
 from ..common import (
     EpisodicShowroomObservationsCfg,
     EpisodicShowroomTaskEnvCfg,
@@ -24,9 +23,15 @@ from .destination_mat import (
     attach_task000525_destination_mat_to_table,
     make_task000525_destination_mat_cfg,
 )
-from .layout import TASK000525_CAN_NAMES, TASK000525_SELECTED_LAYOUT_KEY
+from .home_pose import TASK000525_SAVE_POSE_3_JOINT_POSITIONS
+from .layout import TASK000525_SELECTED_LAYOUT_KEY
 from .object_cfg import iter_task000525_coffee_can_cfgs
-from .profiles import TASK000525_RECORD_DETERMINISTIC, TASK000525_RECORD_RANDOM
+from .profiles import (
+    TASK000525_DETERMINISTIC,
+    TASK000525_RECORD_RANDOMIZED,
+    Task000525RandomizationCfg,
+    validate_task000525_randomization_cfg,
+)
 from .reset_events import randomize_coffee_can_center_regions
 from .robot_stability import apply_task000525_arm_hold_tuning
 from .spec import TASK_000525_ROBOT_USD_PATH, TASK_000525_SPEC
@@ -83,11 +88,9 @@ class Task000525EnvCfg(EpisodicShowroomTaskEnvCfg):
     """Deterministic B-layout centers with 19 joint plus 3 base actions."""
 
     task_spec: ShowroomTaskSpec = TASK_000525_SPEC
-    randomization: ShowroomRandomizationCfg = TASK000525_RECORD_DETERMINISTIC
+    randomization: Task000525RandomizationCfg = TASK000525_DETERMINISTIC
     actions: ContinuousShowroomActionsCfg = ContinuousShowroomActionsCfg()
     observations: Task000525ObservationsCfg = Task000525ObservationsCfg()
-    randomize_coffee_positions: bool = False
-    randomize_coffee_visual_yaw: bool = False
 
     def __post_init__(self):
         # Add the task-local coffee entities before the common task shell checks
@@ -116,6 +119,20 @@ class Task000525EnvCfg(EpisodicShowroomTaskEnvCfg):
         self.scene.robot.spawn.usd_path = TASK_000525_ROBOT_USD_PATH
         self.scene.robot.init_state.pos = TASK_000525_ROBOT_SPAWN_POS
         self.scene.robot.init_state.rot = TASK_000525_ROBOT_SPAWN_ROT
+        self.scene.robot.init_state.joint_pos.update(TASK000525_SAVE_POSE_3_JOINT_POSITIONS)
+        # ``set_robot_joint_pose`` is the reset event used by R/N. Use a copy
+        # to prevent a later task-local mutation from changing the named
+        # constant or a shared event configuration.
+        self.events.set_robot_joint_pose.params["joint_positions"] = dict(
+            TASK000525_SAVE_POSE_3_JOINT_POSITIONS
+        )
+
+        # Online Dijkstra limits linear speed to 0.10 m/s.  The shared swerve
+        # default deadband is also 0.10 m/s, which erases diagonal vx/vy path
+        # components before they reach the wheels.  This task-only threshold
+        # keeps the conservative command while preserving its direction.
+        self.actions.base_action.linear_deadband = 0.01
+        self.actions.base_action.angular_deadband = 0.01
 
         # At 30 Hz, PhysX explicitly recommends stabilization. The wheel
         # collision floor already coincides with root Z, so changing spawn Z
@@ -128,17 +145,23 @@ class Task000525EnvCfg(EpisodicShowroomTaskEnvCfg):
         # limits or changing Task458/shared SG2 dynamics.
         apply_task000525_arm_hold_tuning(self.scene.robot)
 
-        if self.randomize_coffee_positions:
+        validate_task000525_randomization_cfg(self.randomization)
+        coffee_positions = self.randomization.coffee_positions
+        if coffee_positions.enabled:
             self.events.randomize_task000525_coffee_positions = EventTerm(
                 func=randomize_coffee_can_center_regions,
                 mode="reset",
-                params={"layout_key": TASK000525_SELECTED_LAYOUT_KEY},
+                params={"layout_key": coffee_positions.layout_key},
             )
-        if self.randomize_coffee_visual_yaw:
+        coffee_visual_yaw = self.randomization.coffee_visual_yaw
+        if coffee_visual_yaw.enabled:
             self.events.randomize_task000525_coffee_visual_yaw = EventTerm(
                 func=randomize_coffee_can_visual_yaw,
                 mode="reset",
-                params={"object_names": TASK000525_CAN_NAMES},
+                params={
+                    "object_names": coffee_visual_yaw.object_names,
+                    "yaw_range_rad": coffee_visual_yaw.yaw_range_rad,
+                },
             )
 
 
@@ -147,9 +170,7 @@ class Task000525RandomEnvCfg(Task000525EnvCfg):
     """B-region X/Y plus collision-invariant visual-label yaw randomization."""
 
     env_name: str = "Cyclo-Real-Showroom-Task000525-Random-FFW-SG2-v0"
-    randomization: ShowroomRandomizationCfg = TASK000525_RECORD_RANDOM
-    randomize_coffee_positions: bool = True
-    randomize_coffee_visual_yaw: bool = True
+    randomization: Task000525RandomizationCfg = TASK000525_RECORD_RANDOMIZED
 
     def __post_init__(self):
         requested_env_name = self.env_name

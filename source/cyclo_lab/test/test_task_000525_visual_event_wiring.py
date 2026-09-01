@@ -1,35 +1,43 @@
-"""Contracts for Task000525 Random visual-only coffee yaw wiring."""
+"""Contracts for Task000525 visual replay yaw provenance and guards."""
 
 from pathlib import Path
 import unittest
 
 
-TASK_DIR = (
-    Path(__file__).resolve().parents[1]
-    / "cyclo_lab"
-    / "manager_based"
-    / "manipulation"
-    / "showroom"
-    / "config"
-    / "ffw_sg2"
-    / "tasks"
-    / "task_000525"
+REPO = Path(__file__).resolve().parents[3]
+TASK_SCRIPTS = (
+    REPO / "scripts" / "sim2real" / "imitation_learning" / "tasks" / "task_000525"
 )
 
 
 class Task000525VisualEventWiringTest(unittest.TestCase):
-    def test_random_preset_enables_visual_yaw_event(self):
-        source = (TASK_DIR / "env_cfg.py").read_text(encoding="utf-8")
-        self.assertIn("randomize_coffee_visual_yaw: bool = True", source)
-        self.assertIn("randomize_task000525_coffee_visual_yaw", source)
-        self.assertIn("func=randomize_coffee_can_visual_yaw", source)
-        self.assertIn('"object_names": TASK000525_CAN_NAMES', source)
+    def test_replay_requires_and_applies_task_visual_yaw(self):
+        source = (TASK_SCRIPTS / "replay_visual_policy_staging.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Task000525RandomizationCfg", source)
+        self.assertIn("profile.coffee_positions.enabled", source)
+        self.assertIn("profile.coffee_visual_yaw.enabled", source)
+        self.assertIn("randomize_coffee_can_visual_yaw(", source)
+        self.assertIn('"coffee_can_visual_yaw"', source)
 
-    def test_physical_reset_still_samples_xy_only(self):
-        source = (TASK_DIR / "reset_events.py").read_text(encoding="utf-8")
-        self.assertIn("torch.rand((len(env_ids), 2)", source)
-        for component in range(3, 7):
-            self.assertNotIn(f"root_pose[:, {component}", source)
+    def test_replay_guards_all_rigid_roots(self):
+        source = (TASK_SCRIPTS / "replay_visual_policy_staging.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("def protected_root_pose_snapshot", source)
+        self.assertIn("verify_protected_root_poses", source)
+        self.assertIn("if error != 0.0", source)
+        self.assertIn('"protected_pose_max_abs_error"', source)
+
+    def test_audit_rejects_missing_or_changed_visual_evidence(self):
+        source = (TASK_SCRIPTS / "audit_policy_staging.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_visual_randomization(record)", source)
+        self.assertIn("coffee visual-yaw samples do not cover exactly", source)
+        self.assertIn("inconsistent visual yaw rad/deg pair", source)
+        self.assertIn("visual randomization changed protected rigid roots", source)
 
 
 if __name__ == "__main__":

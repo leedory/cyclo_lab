@@ -167,6 +167,8 @@ class SwerveBaseVelocityAction(ActionTerm):
             self._modules,
             self.cfg.wheel_radius,
             config=SwerveControllerConfig(
+                linear_deadband=self.cfg.linear_deadband,
+                angular_deadband=self.cfg.angular_deadband,
                 enabled_speed_limits=self.cfg.enabled_speed_limits,
                 linear_x_limiter=SpeedLimiter(
                     has_acceleration_limits=True,
@@ -205,6 +207,8 @@ class SwerveBaseVelocityActionCfg(ActionTermCfg):
     steering_limit_upper: float = 3.141592653589793
     wheel_speed_limit_lower: float = -50.0
     wheel_speed_limit_upper: float = 50.0
+    linear_deadband: float = 0.10
+    angular_deadband: float = 0.10
     steering_angular_velocity_limit: float = 4.0
     enabled_speed_limits: bool = True
     linear_acceleration_limit: float = 0.6

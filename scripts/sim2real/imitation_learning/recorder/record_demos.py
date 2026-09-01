@@ -84,6 +84,59 @@ parser.add_argument(
     action="store_true",
     help="Synchronize CUDA around profiled sections for more accurate GPU timing. This adds overhead.",
 )
+parser.add_argument(
+    "--task525_phase_markers",
+    action="store_true",
+    help=(
+        "Enable Task525 continuous-demo markers. In Dijkstra mode G=grasp complete "
+        "and automatically returns the carrying arm home before navigation; F/H are optional annotations. "
+        "Manual mode additionally uses M=base motion starts and P=place starts."
+    ),
+)
+parser.add_argument(
+    "--task525_base_mode",
+    choices=("manual", "dijkstra"),
+    default="manual",
+    help=(
+        "Task525 base segment source. 'manual' preserves foot-pad/keyboard control; "
+        "'dijkstra' plans and executes the simulated base path after G."
+    ),
+)
+parser.add_argument(
+    "--task525_dijkstra_linear_max",
+    type=float,
+    default=0.10,
+    help="Task525 online Dijkstra maximum linear body speed in m/s.",
+)
+parser.add_argument(
+    "--task525_dijkstra_angular_max",
+    type=float,
+    default=0.25,
+    help="Task525 online Dijkstra maximum yaw speed in rad/s.",
+)
+parser.add_argument(
+    "--task525_dijkstra_timeout_s",
+    type=float,
+    default=90.0,
+    help="Task525 online Dijkstra fail-closed timeout in seconds.",
+)
+parser.add_argument(
+    "--keyboard_mobile",
+    action="store_true",
+    help="Enable W/S, A/D, Q/E, Space base control while preserving external /cmd_vel when idle.",
+)
+parser.add_argument(
+    "--keyboard_linear_speed",
+    type=float,
+    default=0.10,
+    help="Recording keyboard base translation speed in m/s.",
+)
+parser.add_argument(
+    "--keyboard_angular_speed",
+    type=float,
+    default=0.25,
+    help="Recording keyboard base yaw speed in rad/s.",
+)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -109,7 +162,23 @@ from isaaclab.managers import DatasetExportMode, RecorderTerm, TerminationTermCf
 import cyclo_lab
 import os
 
+from cyclo_lab.robot_specs.ffw.sg2 import (
+    FFW_SG2_ACTION_JOINT_NAMES,
+    FFW_SG2_JOINT_POSITION_LIMITS,
+    FFW_SG2_LIFT_POSITION_UPPER,
+)
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.home_pose import (
+    TASK000525_SAVE_POSE_3_JOINT_POSITIONS,
+)
+
 from recorder_manager.recorder_manager import StreamingRecorderManager
+
+
+TASK525_RIGHT_GRIPPER_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("gripper_r_joint1")
+TASK525_HEAD_PITCH_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("head_joint1")
+TASK525_HEAD_YAW_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("head_joint2")
+TASK525_LIFT_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("lift_joint")
+TASK525_HEAD_PITCH_DOWN_MAX_RAD = FFW_SG2_JOINT_POSITION_LIMITS["head_joint1"][1]
 
 class RateLimiter:
     """Keep a fixed loop schedule while allowing short overruns to catch up."""
@@ -314,12 +383,11 @@ def make_operator_view(env_cfg, env):
 def _recording_metadata(env_cfg, task_name: str, target_step_hz: float) -> dict:
     """Return explicit HDF5 contract metadata for seed-demo recording."""
     metadata = {
-        "schema_version": "cyclo_isaac_hdf5_v1",
-        "robot_contract_id": "ffw_sg2_rev1_fixed_base_19d",
+        "schema_version": "cyclo_lab_hdf5_v1",
         "control_hz": float(target_step_hz),
         "camera_hz": float(getattr(env_cfg, "camera_hz", target_step_hz)),
-        "action_semantics": "pre_step_raw_absolute_joint_position_command",
         "observation_semantics": "pre_step",
+        "obs_last_action_semantics": "previous_step_action",
         "scene_state_semantics": "post_step",
         "task_env_name": task_name,
         "task_id": str(getattr(env_cfg, "task_id", "")),
@@ -331,12 +399,9 @@ def _recording_metadata(env_cfg, task_name: str, target_step_hz: float) -> dict:
     }
 
     if args_cli.robot_type == "FFW_SG2":
-        from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_ACTION_JOINT_NAMES, FFW_SG2_PUBLISHED_JOINT_NAMES
+        from cyclo_lab.robot_specs.ffw.sg2 import hdf5_contract_metadata
 
-        metadata["action_names"] = list(FFW_SG2_ACTION_JOINT_NAMES)
-        metadata["observation_state_names"] = list(FFW_SG2_PUBLISHED_JOINT_NAMES)
-        metadata["action_units"] = ["rad"] * 16 + ["m", "rad", "rad"]
-        metadata["observation_state_units"] = ["rad"] * 18 + ["m"]
+        metadata.update(hdf5_contract_metadata(env_cfg.actions))
 
     return metadata
 
@@ -357,7 +422,14 @@ def _set_episode_metadata(recorder_manager, metadata: dict) -> None:
             ep.metadata = dict(metadata)
 
 
-def _record_step_metadata(recorder_manager, step_index: int, target_step_hz: float, device: str) -> None:
+def _record_step_metadata(
+    recorder_manager,
+    step_index: int,
+    target_step_hz: float,
+    device: str,
+    *,
+    task525_phase: int | None = None,
+) -> None:
     timestamp_s = step_index / target_step_hz
     recorder_manager.add_to_episodes(
         "obs/timestamp_s",
@@ -367,8 +439,30 @@ def _record_step_metadata(recorder_manager, step_index: int, target_step_hz: flo
         "obs/step_index",
         torch.tensor([[step_index]], dtype=torch.int64, device=device),
     )
+    if task525_phase is not None:
+        recorder_manager.add_to_episodes(
+            "obs/task525_demo_phase",
+            torch.tensor([[task525_phase]], dtype=torch.int64, device=device),
+        )
 
 
+
+def _sg2_wheel_speed_norm(env) -> float:
+    """Return the largest SG2 drive-wheel speed norm across environments."""
+
+    from cyclo_lab.robot_specs.ffw.sg2 import SG2_SWERVE_WHEEL_JOINTS
+
+    robot = env.scene["robot"]
+    joint_ids, joint_names = robot.find_joints(
+        list(SG2_SWERVE_WHEEL_JOINTS), preserve_order=True
+    )
+    if len(joint_ids) != len(SG2_SWERVE_WHEEL_JOINTS):
+        raise RuntimeError(f"Failed to resolve SG2 wheel joints: {joint_names}")
+    return float(
+        torch.linalg.vector_norm(robot.data.joint_vel[:, joint_ids], dim=1)
+        .amax()
+        .item()
+    )
 
 def main():
     """Running cyclo_lab teleoperation with cyclo_lab manipulation environment."""
@@ -404,6 +498,23 @@ def main():
     # create environment
     env: ManagerBasedRLEnv = gym.make(task_name, cfg=env_cfg).unwrapped
 
+    task525_markers_enabled = bool(args_cli.task525_phase_markers)
+    if task525_markers_enabled:
+        if args_cli.robot_type != "FFW_SG2" or "Task000525" not in task_name:
+            raise ValueError("--task525_phase_markers is only valid for the FFW_SG2 Task000525 environment.")
+    if args_cli.task525_base_mode == "dijkstra" and not task525_markers_enabled:
+        raise ValueError("--task525_base_mode=dijkstra requires --task525_phase_markers.")
+    if args_cli.task525_base_mode == "dijkstra":
+        # The upstream Dijkstra wrapper is an optional Isaac Sim extension and
+        # is not loaded by the minimal headless experience by default.
+        import omni.kit.app
+
+        extension_manager = omni.kit.app.get_app().get_extension_manager()
+        if not extension_manager.is_extension_enabled("isaacsim.replicator.mobility_gen"):
+            extension_manager.set_extension_enabled_immediate(
+                "isaacsim.replicator.mobility_gen", True
+            )
+
     del env.recorder_manager
     # Ensure dataset file handler is created, but keep stepping in no-save mode
     env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_ALL
@@ -436,6 +547,19 @@ def main():
             mode='record',
             camera_publish_hz=None if args_cli.publish_camera_topics else 0.0,
             publish_odometry_tf=args_cli.publish_extra_state_topics,
+            keyboard_mobile=args_cli.keyboard_mobile,
+            keyboard_linear_speed=args_cli.keyboard_linear_speed,
+            keyboard_angular_speed=args_cli.keyboard_angular_speed,
+            # Task525 collection intentionally uses the physical A3 in
+            # right-only mode. Keep the original left/right topic mapping,
+            # but do not grant the unused left leader ownership at B.
+            # This holds the already-settled reset pose without an offset or
+            # per-joint action rewrite.
+            active_trajectory_groups=(
+                ("right_arm", "head", "lift")
+                if task525_markers_enabled
+                else None
+            ),
         )
     else:
         raise ValueError(
@@ -444,6 +568,44 @@ def main():
 
     start_record_state = False
     recorded_step_index = 0
+    # The three legacy/SDG boundaries retain their upstream names. ``grasp``
+    # and ``release`` make the five Mimic source subtasks explicit without
+    # changing the locomanipulation-SDG ``lift < navigate < place`` contract.
+    task525_markers = {
+        "grasp_step": None,
+        "lift_step": None,
+        "navigate_step": None,
+        "place_step": None,
+        "release_step": None,
+    }
+    task525_auto_navigation = None
+    should_start_task525_auto_navigation = False
+    task525_auto_navigation_failure_reported = False
+    task525_home_arm_action = None
+    task525_place_activation_generation = None
+    task525_reset_joint_hold_target = None
+    task525_reset_lift_hold_target = None
+
+    def task525_save_pose_target() -> torch.Tensor:
+        """Return the A3-aligned Task525 init/home pose in public 19D order."""
+
+        values = [
+            TASK000525_SAVE_POSE_3_JOINT_POSITIONS[name]
+            for name in FFW_SG2_ACTION_JOINT_NAMES
+        ]
+        return torch.tensor(values, dtype=torch.float32, device=env.device).unsqueeze(0).expand(
+            env.num_envs, -1
+        ).clone()
+
+    def task525_reset_lift_target() -> torch.Tensor:
+        """Return the known upper/reset lift target, independent of A3 cache."""
+
+        return torch.full(
+            (env.num_envs,),
+            FFW_SG2_LIFT_POSITION_UPPER,
+            dtype=torch.float32,
+            device=env.device,
+        )
 
     def clear_episode_cache(context: str):
         try:
@@ -467,21 +629,230 @@ def main():
         if not start_record_state:
             print("[Control] Save ignored because recording has not started.")
             return
+        if task525_markers_enabled:
+            if (
+                args_cli.task525_base_mode == "dijkstra"
+                and (task525_auto_navigation is None or not task525_auto_navigation.completed)
+            ):
+                status = "unavailable" if task525_auto_navigation is None else task525_auto_navigation.status
+                reason = "" if task525_auto_navigation is None else f" ({task525_auto_navigation.failure_reason})"
+                print(
+                    "[Task525] Save refused: automatic Dijkstra navigation has not completed "
+                    f"(status={status}){reason}. Press R to reset after a failure."
+                )
+                return
+            required_marker_names = (
+                ("grasp_step", "lift_step", "navigate_step", "place_step")
+                if args_cli.task525_base_mode == "dijkstra"
+                else tuple(task525_markers)
+            )
+            missing = [name for name in required_marker_names if task525_markers[name] is None]
+            if missing:
+                print(
+                    "[Task525] Save refused: missing phase markers "
+                    + (
+                        f"{missing}. Use G after a stable grasp, wait for automatic carrying-home/navigation, "
+                        "toggle the right tact after arrival, perform place/release, then press N."
+                        if args_cli.task525_base_mode == "dijkstra"
+                        else f"{missing}. Use F, G, M, stop the manually controlled base, P, place/release, H, "
+                        "return home, then press N."
+                    )
+                )
+                return
         should_reset_task_success = True
 
     teleop_interface.add_callback("R", reset_recording_instance)
     teleop_interface.add_callback("N", reset_task_success)
 
+    def mark_grasp_step():
+        if not task525_markers_enabled or not start_record_state:
+            print("[Task525] F ignored: start a Task525 marked recording with B first.")
+            return
+        if task525_markers["grasp_step"] is not None:
+            print("[Task525] F ignored: stable grasp has already been marked.")
+            return
+        if recorded_step_index < 2:
+            print("[Task525] F ignored: record the approach and gripper close before marking a stable grasp.")
+            return
+        task525_markers["grasp_step"] = recorded_step_index
+        task525_markers["lift_step"] = recorded_step_index
+        print(
+            f"[Task525] grasp_step={recorded_step_index}, lift_step={recorded_step_index}. "
+            "Remove the can from the cabinet and return the right arm to the carry/home pose."
+        )
+
+    def mark_lift_step():
+        nonlocal should_start_task525_auto_navigation
+        if not task525_markers_enabled or not start_record_state:
+            print("[Task525] G ignored: start a Task525 marked recording with B first.")
+            return
+        if args_cli.task525_base_mode == "dijkstra":
+            if task525_auto_navigation is not None and task525_auto_navigation.active:
+                print("[Task525] G ignored: automatic carrying-home/Dijkstra navigation is already running.")
+                return
+            if (
+                task525_auto_navigation is not None
+                and task525_auto_navigation.status == task525_auto_navigation.FAILED
+            ):
+                print("[Task525] G ignored: automatic navigation failed. Press R to reset before retrying.")
+                return
+            if task525_auto_navigation is not None and task525_auto_navigation.completed:
+                print("[Task525] G ignored: automatic navigation has already completed; perform place.")
+                return
+            if (
+                task525_auto_navigation is not None
+                and task525_auto_navigation.awaiting_place_activation
+            ):
+                print("[Task525] G ignored: base has arrived; toggle the right A3 tact to enable place.")
+                return
+            # F remains an optional, more precise grasp annotation. G is the
+            # only required operator signal in automatic mode: it records the
+            # grasp boundary and initiates the safe return-home transition.
+            task525_markers["grasp_step"] = (
+                recorded_step_index
+                if task525_markers["grasp_step"] is None
+                else task525_markers["grasp_step"]
+            )
+            task525_markers["lift_step"] = recorded_step_index
+            should_start_task525_auto_navigation = True
+            print(
+                "[Task525] G accepted: preserving the closed right gripper, returning the arm to its "
+                "A3-aligned Task525 init/home, then starting Dijkstra navigation."
+            )
+            return
+        if task525_markers["grasp_step"] is None:
+            print("[Task525] G ignored: press F after the stable grasp first.")
+            return
+        if task525_markers["navigate_step"] is not None:
+            print("[Task525] G ignored: navigation has already been marked.")
+            return
+        print("[Task525] G accepted: carry/home is ready; press M to begin manual navigation.")
+
+    def mark_task525_navigation():
+        if not task525_markers_enabled or not start_record_state:
+            print("[Task525] M ignored: start a Task525 marked recording with B first.")
+            return
+        if args_cli.task525_base_mode == "dijkstra":
+            print("[Task525] M is not needed in Dijkstra mode. Press G after pick/carry to start auto navigation.")
+            return
+        if task525_markers["lift_step"] is None:
+            print("[Task525] M ignored: press F after grasp and G after carry/home first.")
+            return
+        task525_markers["navigate_step"] = recorded_step_index
+        task525_markers["place_step"] = None
+        print(
+            f"[Task525] navigate_step={recorded_step_index}. "
+            "Move the base with the foot pad or keyboard; A3 arm mappings remain unchanged."
+        )
+
+    def mark_task525_place():
+        if not task525_markers_enabled or not start_record_state:
+            print("[Task525] P ignored: start a Task525 marked recording with B first.")
+            return
+        if task525_markers["navigate_step"] is None:
+            print("[Task525] P ignored: mark navigation start with M first.")
+            return
+        if args_cli.task525_base_mode == "dijkstra":
+            if task525_auto_navigation is None or not task525_auto_navigation.completed:
+                print("[Task525] P ignored: wait for the automatic Dijkstra arrival message first.")
+                return
+            task525_markers["place_step"] = recorded_step_index
+            print(f"[Task525] place_step={recorded_step_index}. Begin right-arm place.")
+            return
+        wheel_speed_norm = _sg2_wheel_speed_norm(env)
+        if wheel_speed_norm > 0.1:
+            print(
+                "[Task525] P ignored because the base is still moving "
+                f"({wheel_speed_norm:.3f} rad/s > 0.100 rad/s). Stop and wait, then press P again."
+            )
+            return
+        task525_markers["place_step"] = recorded_step_index
+        print(f"[Task525] place_step={recorded_step_index}. Keep the base stopped and perform place.")
+
+    def mark_task525_release():
+        if not task525_markers_enabled or not start_record_state:
+            print("[Task525] H ignored: start a Task525 marked recording with B first.")
+            return
+        if task525_markers["place_step"] is None:
+            print("[Task525] H ignored: wait for the place phase before marking release.")
+            return
+        if task525_markers["release_step"] is not None:
+            print("[Task525] H ignored: release has already been marked.")
+            return
+        task525_markers["release_step"] = recorded_step_index
+        print(
+            f"[Task525] release_step={recorded_step_index}. "
+            "Return the right arm to its initial pose, then press N to save."
+        )
+
+    def current_task525_phase() -> int:
+        if task525_markers["release_step"] is not None:
+            return 4
+        if task525_markers["place_step"] is not None:
+            return 3
+        if task525_markers["navigate_step"] is not None:
+            return 2
+        if task525_markers["lift_step"] is not None:
+            return 1
+        return 0
+
+    teleop_interface.add_callback("F", mark_grasp_step)
+    teleop_interface.add_callback("G", mark_lift_step)
+    teleop_interface.add_callback("M", mark_task525_navigation)
+    teleop_interface.add_callback("P", mark_task525_place)
+    teleop_interface.add_callback("H", mark_task525_release)
+
     target_step_hz = args_cli.step_hz
     if target_step_hz is None:
         target_step_hz = getattr(env_cfg, "recording_control_hz", 60.0)
+    if args_cli.task525_base_mode == "dijkstra":
+        from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.online_dijkstra import (
+            Task525OnlineDijkstraCfg,
+            Task525OnlineDijkstraNavigator,
+        )
+
+        task525_auto_navigation = Task525OnlineDijkstraNavigator(
+            env,
+            Task525OnlineDijkstraCfg(
+                linear_max=args_cli.task525_dijkstra_linear_max,
+                angular_max=args_cli.task525_dijkstra_angular_max,
+                max_navigation_seconds=args_cli.task525_dijkstra_timeout_s,
+            ),
+            control_hz=target_step_hz,
+        )
     rate_limiter = RateLimiter(target_step_hz)
     recording_metadata = _recording_metadata(env_cfg, task_name, target_step_hz)
+    if task525_markers_enabled:
+        auto_dijkstra = args_cli.task525_base_mode == "dijkstra"
+        recording_metadata.update({
+            "task525_seed_mode": (
+                "continuous_pick_online_dijkstra_base_place"
+                if auto_dijkstra
+                else "continuous_pick_manual_base_place"
+            ),
+            "task525_phase_semantics": (
+                "0=grasp,1=clear_cabinet_and_return_carry_home,2=navigation,"
+                "3=place_and_release,4=return_home_without_object"
+            ),
+            "task525_base_command_source": (
+                "online_dijkstra_fixed_yaw_holonomic"
+                if auto_dijkstra
+                else "external_cmd_vel_foot_pad_or_keyboard"
+            ),
+            "task525_online_dijkstra": auto_dijkstra,
+            "task525_a3_mapping": "original_dual_arm_left_to_left_right_to_right",
+            "task525_collection_arm_usage": "right_only_for_this_recording",
+        })
     _set_dataset_metadata(env.recorder_manager, recording_metadata)
 
     # reset environment
     env.reset()
     teleop_interface.reset()
+    if task525_markers_enabled and args_cli.task525_base_mode == "dijkstra":
+        # A new recorder process must start at the reset height even if the
+        # A3 lift leader still publishes the previous episode's lowered pose.
+        task525_reset_lift_hold_target = task525_reset_lift_target()
+        task525_reset_joint_hold_target = task525_save_pose_target()
     operator_view = make_operator_view(env_cfg, env)
 
     current_recorded_demo_count = 0
@@ -490,14 +861,56 @@ def main():
 
     def start_recording_instance():
         nonlocal start_record_state, recorded_step_index
+        nonlocal should_start_task525_auto_navigation, task525_auto_navigation_failure_reported
+        nonlocal task525_home_arm_action, task525_place_activation_generation
+        nonlocal task525_reset_joint_hold_target, task525_reset_lift_hold_target
         if start_record_state:
             return
+        if args_cli.robot_type == "FFW_SG2":
+            wheel_speed_norm = _sg2_wheel_speed_norm(env)
+            if wheel_speed_norm > 0.1:
+                print(
+                    "[Control] Recording was not started because the SG2 wheels "
+                    f"are still moving ({wheel_speed_norm:.3f} rad/s > 0.100 rad/s). "
+                    "Wait for the robot to settle, then press B again."
+                )
+                return
         clear_episode_cache("pre-recording")
         env.recorder_manager.recording_enabled = True
         env.recorder_manager.record_post_reset(torch.arange(env.num_envs, device=env.device))
         recorded_step_index = 0
+        for marker_name in task525_markers:
+            task525_markers[marker_name] = None
+        should_start_task525_auto_navigation = False
+        task525_auto_navigation_failure_reported = False
+        task525_place_activation_generation = None
+        if task525_auto_navigation is not None:
+            task525_auto_navigation.reset()
+            # G always returns both arms to the A3-aligned Task525 init/home.
+            # It later substitutes only the measured carrying gripper and
+            # task-specific maximum-down head target.
+            task525_home_arm_action = task525_save_pose_target()
+        task525_reset_joint_hold_target = None
+        if task525_markers_enabled and args_cli.task525_base_mode == "dijkstra":
+            # A3 and Task525 use the same absolute init/home joint values.
+            # Do not add a task-local offset: subsequent A3 save-pose commands
+            # must reach the exact specified joint target.
+            teleop_interface.begin_control_activation()
+            print(
+                "[Task525] B activation: using absolute A3 joint commands for right-arm/head/lift; "
+                "the unused left arm remains at its settled reset pose. No relative offset is used."
+            )
+        if not (task525_markers_enabled and args_cli.task525_base_mode == "dijkstra"):
+            # Manual-base collection continues to expose the original lift
+            # topic. Automatic Task525 owns lift height until G arrives.
+            task525_reset_lift_hold_target = None
         start_record_state = True
         print("Start Recording!!!")
+        if task525_markers_enabled and args_cli.task525_base_mode == "dijkstra":
+            print(
+                "[Task525] Recording is armed. B only starts recording; after a stable grasp, "
+                "lift the can clear of the cabinet and press G to start automatic navigation."
+            )
 
     def request_start_recording_instance():
         nonlocal should_start_recording_instance
@@ -518,6 +931,10 @@ def main():
                     should_start_recording_instance = False
                     with profiler.time("start_recording"):
                         start_recording_instance()
+                    # ``actions`` was sampled before B established the
+                    # Refresh after activation so the first recording frame
+                    # uses the newly anchored absolute-command blend.
+                    actions = teleop_interface.get_action()
                 if should_reset_task_success:
                     with profiler.time("save_success_export"):
                         should_reset_task_success = False
@@ -535,6 +952,8 @@ def main():
                         try:
                             episode_metadata = dict(recording_metadata)
                             episode_metadata["operator_accepted"] = True
+                            if task525_markers_enabled:
+                                episode_metadata.update(task525_markers)
                             for ep in getattr(env.recorder_manager, "_episodes", {}).values():
                                 if ep is not None and not ep.is_empty():
                                     ep.success = True
@@ -556,10 +975,30 @@ def main():
                         clear_episode_cache("recording")
 
                         env.reset()
+                        # R/N must not replay the old lift target after a
+                        # G-driven lower. Hold the freshly reset lift until
+                        # the next B deliberately starts a new collection.
+                        if task525_markers_enabled:
+                            task525_reset_lift_hold_target = task525_reset_lift_target()
+                            task525_reset_joint_hold_target = task525_save_pose_target()
+                            teleop_interface.clear_command_cache()
+                        for marker_name in task525_markers:
+                            task525_markers[marker_name] = None
+                        should_start_task525_auto_navigation = False
+                        task525_auto_navigation_failure_reported = False
+                        task525_home_arm_action = None
+                        task525_place_activation_generation = None
+                        if task525_auto_navigation is not None:
+                            task525_auto_navigation.reset()
                         should_reset_recording_instance = False
                         if start_record_state:
                             print("Stop Recording!!!")
                         start_record_state = False
+                        if task525_markers_enabled:
+                            print(
+                                "[Task525] Reset complete: lift is held at the reset height until G; "
+                                "only a later G navigation can run the automatic 30 cm lower."
+                            )
                         env.termination_manager.set_term_cfg("success", TerminationTermCfg(func=lambda env: torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)))
                         # print out the current demo count if it has changed
                         print(f"Resetting recording instance. Current recorded demo count: {current_recorded_demo_count}")
@@ -589,8 +1028,136 @@ def main():
                         # Handle tensor actions
                         if actions.ndim == 1:
                             actions = actions.unsqueeze(0)
+                        if (
+                            task525_markers_enabled
+                            and args_cli.task525_base_mode == "dijkstra"
+                            and not start_record_state
+                            and task525_reset_joint_hold_target is not None
+                        ):
+                            actions[:, :19] = task525_reset_joint_hold_target.to(
+                                device=actions.device, dtype=actions.dtype
+                            )
+                        if (
+                            task525_markers_enabled
+                            and args_cli.task525_base_mode == "dijkstra"
+                            and task525_reset_lift_hold_target is not None
+                        ):
+                            actions[:, TASK525_LIFT_ACTION_INDEX] = task525_reset_lift_hold_target.to(
+                                device=actions.device, dtype=actions.dtype
+                            )
+                        if (
+                            task525_markers_enabled
+                            and args_cli.task525_base_mode == "dijkstra"
+                            and should_start_task525_auto_navigation
+                        ):
+                            should_start_task525_auto_navigation = False
+                            if task525_auto_navigation is None:
+                                raise RuntimeError("Task525 Dijkstra navigator was not initialized.")
+                            if task525_home_arm_action is None:
+                                raise RuntimeError(
+                                    "Task525 automatic home target is unavailable; press B to begin a new episode."
+                                )
+                            home_arm_action = task525_home_arm_action.to(
+                                device=actions.device, dtype=actions.dtype
+                            ).clone()
+                            # Re-enter canonical save-pose 3 without
+                            # snapping the can-holding gripper to a cached A3
+                            # target. The actual simulated master joint is
+                            # the only authoritative grip value at G.
+                            measured_action = teleop_interface.get_measured_joint_hold_action()
+                            home_arm_action[:, TASK525_RIGHT_GRIPPER_ACTION_INDEX] = measured_action[
+                                :, TASK525_RIGHT_GRIPPER_ACTION_INDEX
+                            ]
+                            # The carry/base segment has no operator head
+                            # control: always look maximally downward and
+                            # center left/right while returning home.
+                            home_arm_action[:, TASK525_HEAD_PITCH_ACTION_INDEX] = (
+                                TASK525_HEAD_PITCH_DOWN_MAX_RAD
+                            )
+                            home_arm_action[:, TASK525_HEAD_YAW_ACTION_INDEX] = 0.0
+                            if task525_auto_navigation.start(actions, home_arm_action=home_arm_action):
+                                task525_markers["place_step"] = None
+                                print(
+                                    "[Task525 AutoNav] Dijkstra path ready: "
+                                    f"{len(task525_auto_navigation.path.points)} waypoints, "
+                                    f"{float(task525_auto_navigation.path.get_path_length()):.3f} m. "
+                                    "Returning the arm home first; base commands stay zero until it settles."
+                                )
+                            else:
+                                task525_auto_navigation_failure_reported = True
+                                print(
+                                    "[Task525 AutoNav] Failed before motion. "
+                                    f"{task525_auto_navigation.failure_reason} Press R to reset."
+                                )
+
+                        if task525_markers_enabled and args_cli.task525_base_mode == "dijkstra":
+                            if task525_auto_navigation is None:
+                                raise RuntimeError("Task525 Dijkstra navigator was not initialized.")
+                            status_before = task525_auto_navigation.status
+                            actions = task525_auto_navigation.apply(actions)
+                            if (
+                                status_before == task525_auto_navigation.RETURNING_HOME
+                                and task525_auto_navigation.status == task525_auto_navigation.NAVIGATING
+                            ):
+                                task525_markers["navigate_step"] = recorded_step_index
+                                print(
+                                    "[Task525 AutoNav] Carrying-home pose settled. Starting Dijkstra base motion; "
+                                    "manual base commands remain ignored."
+                                )
+                            if (
+                                status_before != task525_auto_navigation.WAITING_FOR_PLACE_ACTIVATION
+                                and task525_auto_navigation.awaiting_place_activation
+                            ):
+                                if task525_auto_navigation.frozen_arm_action is None:
+                                    raise RuntimeError("Task525 lift target is unavailable at place handoff.")
+                                # Keep the post-G lower through tact/place;
+                                # outside this one path the reset-height lock
+                                # remains in effect.
+                                task525_reset_lift_hold_target = (
+                                    task525_auto_navigation.frozen_arm_action[
+                                        :, TASK525_LIFT_ACTION_INDEX
+                                    ].detach().clone()
+                                )
+                                task525_place_activation_generation = teleop_interface.right_arm_tact_generation()
+                                print(
+                                    "[Task525 AutoNav] Arrived, wheel motion settled, and lift lowered. "
+                                    "Base and arms are held. Press the right A3 tact once to enable right-arm place."
+                                )
+                            if task525_auto_navigation.awaiting_place_activation:
+                                if task525_place_activation_generation is None:
+                                    raise RuntimeError("Task525 place handoff is missing its right-arm command snapshot.")
+                                if (
+                                    teleop_interface.right_arm_tact_generation()
+                                    > task525_place_activation_generation
+                                ):
+                                    if task525_auto_navigation.enable_place_control():
+                                        teleop_interface.begin_control_activation()
+                                        task525_markers["place_step"] = recorded_step_index
+                                        print(
+                                        "[Task525 AutoNav] Right A3 tact received. "
+                                            "Right-arm place is enabled; base remains held at zero."
+                                        )
+                            if (
+                                task525_auto_navigation.status == task525_auto_navigation.FAILED
+                                and not task525_auto_navigation_failure_reported
+                            ):
+                                task525_auto_navigation_failure_reported = True
+                                print(
+                                    "[Task525 AutoNav] Stopped without reaching the goal. "
+                                    f"{task525_auto_navigation.failure_reason} Press R to reset."
+                                )
                         if start_record_state and env.recorder_manager.recording_enabled:
-                            _record_step_metadata(env.recorder_manager, recorded_step_index, target_step_hz, env.device)
+                            _record_step_metadata(
+                                env.recorder_manager,
+                                recorded_step_index,
+                                target_step_hz,
+                                env.device,
+                                task525_phase=(
+                                    current_task525_phase()
+                                    if task525_markers_enabled
+                                    else None
+                                ),
+                            )
                             recorded_step_index += 1
                         with profiler.time("env_step"):
                             env.step(actions)

@@ -46,10 +46,13 @@ def randomize_coffee_can_visual_yaw(
     samples = torch.rand(
         (len(env_ids), len(object_names)), device=env.device, dtype=torch.float32
     )
-    yaw_deg = torch.rad2deg(yaw_min + samples * (yaw_max - yaw_min))
+    yaw_rad = yaw_min + samples * (yaw_max - yaw_min)
+    yaw_deg = torch.rad2deg(yaw_rad)
 
     env_id_values = env_ids.detach().cpu().tolist()
-    yaw_values = yaw_deg.detach().cpu().tolist()
+    yaw_rad_values = yaw_rad.detach().cpu().tolist()
+    yaw_deg_values = yaw_deg.detach().cpu().tolist()
+    sample_cache = getattr(env, "_task000525_coffee_visual_yaw", {})
     for sample_index, env_id in enumerate(env_id_values):
         env_prim_path = env.scene.env_prim_paths[env_id]
         for object_index, object_name in enumerate(object_names):
@@ -74,4 +77,12 @@ def randomize_coffee_can_visual_yaw(
                 rotate_op = xformable.AddRotateZOp(
                     precision=UsdGeom.XformOp.PrecisionFloat
                 )
-            rotate_op.Set(float(yaw_values[sample_index][object_index]))
+            sampled_rad = float(yaw_rad_values[sample_index][object_index])
+            sampled_deg = float(yaw_deg_values[sample_index][object_index])
+            rotate_op.Set(sampled_deg)
+            sample_cache.setdefault(int(env_id), {})[object_name] = {
+                "rad": sampled_rad,
+                "deg": sampled_deg,
+            }
+
+    env._task000525_coffee_visual_yaw = sample_cache
