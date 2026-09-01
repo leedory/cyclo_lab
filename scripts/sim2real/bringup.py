@@ -70,6 +70,7 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import torch
 from isaaclab.envs import ManagerBasedEnvCfg
+from isaaclab.managers import RecorderManagerBaseCfg
 from isaaclab.sensors import CameraCfg
 from isaaclab_tasks.utils import parse_env_cfg
 from pynput.keyboard import Listener
@@ -164,6 +165,8 @@ def _configure_environment():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     if not isinstance(env_cfg, ManagerBasedEnvCfg):
         raise TypeError(f"Task {args_cli.task} is not a manager-based environment.")
+
+    env_cfg.recorders = RecorderManagerBaseCfg()
 
     apply_robot_profile = getattr(env_cfg, "apply_robot_profile", None)
     if apply_robot_profile is not None:
