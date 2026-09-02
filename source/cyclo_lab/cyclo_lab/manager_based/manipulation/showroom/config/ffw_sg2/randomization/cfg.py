@@ -71,9 +71,9 @@ class CameraRandomizationCfg:
     enabled: bool = False
     camera_names: tuple[str, ...] = ()
     coupled_focal_scale_range: tuple[float, float] = (0.95, 1.05)
-    local_roll_max_rad: float = math.radians(5.0)
-    local_pitch_max_rad: float = math.radians(5.0)
-    local_yaw_max_rad: float = math.radians(5.0)
+    local_roll_max_rad: float = math.radians(2.5)
+    local_pitch_max_rad: float = math.radians(2.5)
+    local_yaw_max_rad: float = math.radians(2.5)
 
 
 @dataclass(frozen=True)
