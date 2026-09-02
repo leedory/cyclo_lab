@@ -28,6 +28,7 @@ from ..platform.env_cfg import DeterministicResetEventsCfg
 from ..platform.robot_cfg import (
     apply_sg2_showroom_camera_profile,
     enable_sg2_showroom_operator_cameras,
+    enable_sg2_showroom_ui_session_camera,
     make_sg2_showroom_robot_cfg,
 )
 from ..randomization.cfg import (
@@ -232,6 +233,9 @@ class EpisodicShowroomTaskEnvCfg(ManagerBasedRLEnvCfg):
 
     def enable_operator_preview_cameras(self) -> None:
         enable_sg2_showroom_operator_cameras(self)
+
+    def enable_ui_session_camera(self) -> None:
+        enable_sg2_showroom_ui_session_camera(self)
 
     def init_action_cfg(self, mode: str) -> None:
         if mode not in ("record", "inference"):

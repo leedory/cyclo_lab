@@ -39,6 +39,11 @@ JOINT_NAMES = [
     "angular_z",
 ]
 CAMERAS = ("cam_left_head", "cam_left_wrist", "cam_right_wrist")
+CAMERA_SHAPES_H_W = {
+    "cam_left_head": (376, 672),
+    "cam_left_wrist": (640, 480),
+    "cam_right_wrist": (640, 480),
+}
 
 
 class AuditError(RuntimeError):
@@ -51,7 +56,9 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def probe_video(path: Path, expected_fps: int) -> int:
+def probe_video(
+    path: Path, expected_fps: int, expected_shape_h_w: tuple[int, int]
+) -> int:
     result = subprocess.run(
         [
             "ffprobe",
@@ -82,11 +89,12 @@ def probe_video(path: Path, expected_fps: int) -> int:
         "height": int(stream["height"]),
         "fps": float(Fraction(stream["avg_frame_rate"])),
     }
+    expected_height, expected_width = expected_shape_h_w
     expected = {
         "codec_name": "h264",
         "pix_fmt": "yuv420p",
-        "width": 640,
-        "height": 480,
+        "width": expected_width,
+        "height": expected_height,
         "fps": float(expected_fps),
     }
     if actual != expected:
@@ -142,12 +150,17 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     for camera in CAMERAS:
         feature = features.get(f"observation.images.rgb.{camera}", {})
         video_info = feature.get("info", {})
-        if feature.get("dtype") != "video" or feature.get("shape") != [3, 480, 640]:
+        height, width = CAMERA_SHAPES_H_W[camera]
+        if feature.get("dtype") != "video" or feature.get("shape") != [
+            3,
+            height,
+            width,
+        ]:
             raise AuditError(f"{camera}: bad image feature")
         expected_video_info = {
             "video.fps": 15.0,
-            "video.height": 480,
-            "video.width": 640,
+            "video.height": height,
+            "video.width": width,
             "video.channels": 3,
             "video.codec": "h264",
             "video.pix_fmt": "yuv420p",
@@ -243,7 +256,9 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         )
         if not paths:
             raise AuditError(f"{camera}: no video chunks")
-        frames = sum(probe_video(path, 15) for path in paths)
+        frames = sum(
+            probe_video(path, 15, CAMERA_SHAPES_H_W[camera]) for path in paths
+        )
         if frames != args.expected_frames:
             raise AuditError(f"{camera}: frame sum {frames} != {args.expected_frames}")
         camera_frames[camera] = frames
@@ -260,7 +275,11 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         "camera_frames": camera_frames,
         "state_action_dim": 22,
         "fps": 15,
-        "video_contract": "h264/yuv420p/640x480",
+        "video_contract": {
+            "codec": "h264",
+            "pixel_format": "yuv420p",
+            "camera_shapes_h_w": CAMERA_SHAPES_H_W,
+        },
     }
 
 

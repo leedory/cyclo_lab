@@ -5,6 +5,8 @@ from copy import deepcopy
 from isaaclab.assets.articulation import ArticulationCfg
 
 from cyclo_lab.assets.sensors.ffw_sg2_cameras import (
+    FFW_SG2_HEAD_CAMERA_HEIGHT,
+    FFW_SG2_HEAD_CAMERA_WIDTH,
     make_ffw_sg2_head_camera_cfg,
     make_ffw_sg2_overhead_camera_cfg,
     make_ffw_sg2_wrist_camera_cfg,
@@ -69,11 +71,21 @@ def apply_sg2_showroom_camera_profile(env_cfg, profile_name: str) -> None:
     env_cfg.robot_profile_sha256 = profile.source_sha256
     env_cfg.robot_profile_source = str(profile.source_path)
 
+    # The checked-in 1050 profile currently contains a 640x480 head CameraInfo.
+    # Do not apply that matrix to the canonical 672x376 raster. A future profile
+    # calibrated at the canonical size will be consumed without changing this
+    # construction path; until then the simulator uses its generic pinhole lens.
+    head_intrinsic_matrix = (
+        head.intrinsic_matrix
+        if (head.height, head.width)
+        == (FFW_SG2_HEAD_CAMERA_HEIGHT, FFW_SG2_HEAD_CAMERA_WIDTH)
+        else None
+    )
     env_cfg.scene.cam_head = make_ffw_sg2_head_camera_cfg(
         update_period=0.0,
-        width=head.width,
-        height=head.height,
-        intrinsic_matrix=head.intrinsic_matrix,
+        width=FFW_SG2_HEAD_CAMERA_WIDTH,
+        height=FFW_SG2_HEAD_CAMERA_HEIGHT,
+        intrinsic_matrix=head_intrinsic_matrix,
     )
     env_cfg.scene.cam_wrist_left = make_ffw_sg2_wrist_camera_cfg(
         "left",
@@ -104,4 +116,12 @@ def enable_sg2_showroom_operator_cameras(env_cfg) -> None:
     )
     env_cfg.scene.cam_overhead_right = make_ffw_sg2_overhead_camera_cfg(
         "right", update_period=0.0
+    )
+
+
+def enable_sg2_showroom_ui_session_camera(env_cfg) -> None:
+    """Attach only the center external camera streamed by a UI session."""
+
+    env_cfg.scene.cam_overhead_center = make_ffw_sg2_overhead_camera_cfg(
+        "center", update_period=0.0
     )

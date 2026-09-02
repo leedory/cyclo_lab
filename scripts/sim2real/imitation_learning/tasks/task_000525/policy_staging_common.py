@@ -25,10 +25,15 @@ POLICY_ACTION_SEMANTICS = (
 )
 POLICY_CONTRACT_ID = "ffw_sg2_rev1_mobile_22d_v1"
 TASK_PATH = "locomanipulation_sdg_output_data/task"
+CANONICAL_CAMERA_SHAPES = {
+    "cam_head": (376, 672),
+    "cam_wrist_left": (640, 480),
+    "cam_wrist_right": (640, 480),
+}
 CAMERA_ROTATION_DEG = {
     "cam_head": 0,
-    "cam_wrist_left": 270,
-    "cam_wrist_right": 270,
+    "cam_wrist_left": 0,
+    "cam_wrist_right": 0,
 }
 POLICY_INSTRUCTIONS = {
     "pick": "Pick the green coffee can out of the cabinet and carry it to the home pose.",
@@ -247,11 +252,12 @@ def crop_policy_episode(
 
 def canonicalize_camera_frame(source_camera: str, frame: np.ndarray) -> np.ndarray:
     rgb = np.asarray(frame[..., :3], dtype=np.uint8)
-    rotation = CAMERA_ROTATION_DEG.get(source_camera, 0)
-    if rotation == 270 and rgb.shape[:2] == (640, 480):
-        rgb = np.rot90(rgb, k=1)
-    if rgb.shape[:2] != (480, 640):
+    expected_shape = CANONICAL_CAMERA_SHAPES.get(source_camera)
+    if expected_shape is None:
+        raise Task525PolicyDataError(f"unsupported policy camera: {source_camera}")
+    if rgb.shape[:2] != expected_shape:
         raise Task525PolicyDataError(
-            f"{source_camera}: canonical frame must be 480x640, got {rgb.shape[:2]}"
+            f"{source_camera}: canonical frame HxW must be {expected_shape}, "
+            f"got {rgb.shape[:2]}; rotation and resizing are not permitted"
         )
     return np.ascontiguousarray(rgb)

@@ -362,9 +362,11 @@ class FFWSG2TopicBridge:
             self._activation_blend_start_time = time.monotonic()
             self._activation_blend_duration = float(transition_seconds)
 
-    def publish_observations(self) -> None:
+    def publish_observations(self) -> bool:
+        """Publish state and return whether a due camera batch succeeded."""
+
         self.state_publisher.publish_all()
-        self.camera_publishers.publish()
+        return self.camera_publishers.publish()
 
     def clear_command_cache(self) -> None:
         with self._lock:

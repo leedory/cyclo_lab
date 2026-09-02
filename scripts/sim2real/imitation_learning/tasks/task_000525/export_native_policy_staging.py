@@ -17,6 +17,7 @@ import h5py
 import numpy as np
 
 from policy_staging_common import (
+    CANONICAL_CAMERA_SHAPES,
     CAMERA_ROTATION_DEG,
     POLICY_ACTION_SEMANTICS,
     POLICY_CONTRACT_ID,
@@ -52,8 +53,9 @@ def write_video(
     fps: int,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    height, width = CANONICAL_CAMERA_SHAPES[source_camera]
     writer = cv2.VideoWriter(
-        str(path), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (640, 480)
+        str(path), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (width, height)
     )
     if not writer.isOpened():
         raise Task525PolicyDataError(f"could not open video writer: {path}")
@@ -117,8 +119,6 @@ def export(args: argparse.Namespace) -> dict:
         manifest = {
             "schema": STAGING_SCHEMA,
             "created_utc": utc_now(),
-            "status": "native_phase_export_unreviewed",
-            "training_ready": False,
             "source_hdf": str(source_path),
             "source_hdf_sha256": sha256(source_path),
             "source_episode_count": len(names),
@@ -147,10 +147,11 @@ def export(args: argparse.Namespace) -> dict:
             "seed": None,
             "fps": contract["fps"],
             "camera_map": camera_map,
+            "camera_shapes_h_w": CANONICAL_CAMERA_SHAPES,
             "camera_rotation_deg": CAMERA_ROTATION_DEG,
             "action_semantics": STAGING_ACTION_SEMANTICS,
             "observation_semantics": "source pre_step phase crop",
-            "render_contract": "native source RGB with canonical wrist orientation",
+            "render_contract": "native canonical RGB; no rotation or resizing",
             "episodes": [],
             "batches": [],
             "gpu_samples": [],

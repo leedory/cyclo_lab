@@ -87,16 +87,19 @@ class CompressedCameraPublishers:
     def endpoints(self) -> tuple:
         return tuple(self.writers.values())
 
-    def publish(self) -> None:
+    def publish(self) -> bool:
+        """Publish one due camera batch and report whether every frame succeeded."""
+
         if not self.writers:
-            return
+            return False
         if self._publish_hz is not None and self._publish_hz > 0.0:
             now = time.monotonic()
             publish_period = 1.0 / self._publish_hz
             if now - self._last_publish_time < publish_period * 0.95:
-                return
+                return False
             self._last_publish_time = now
 
+        batch_succeeded = True
         for camera_name, writer in self.writers.items():
             try:
                 publish_compressed_camera(
@@ -106,6 +109,8 @@ class CompressedCameraPublishers:
                     image_rotation_quarter_turns=self._image_rotations.get(camera_name, 0),
                 )
             except Exception as exc:
+                batch_succeeded = False
                 if camera_name not in self._warned_camera_publish_errors:
                     self._warned_camera_publish_errors.add(camera_name)
                     print(f"[Zenoh ROS2] camera publish error for {camera_name}: {exc}")
+        return batch_succeeded

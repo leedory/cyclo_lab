@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 import pytest
@@ -104,3 +104,14 @@ def test_right_tact_counter_ignores_non_toggle_enable_messages() -> None:
     bridge._on_right_arm_enable(SimpleNamespace(data=2))
 
     assert bridge.right_arm_tact_generation() == 1
+
+
+def test_publish_observations_returns_camera_batch_result() -> None:
+    bridge = FFWSG2TopicBridge.__new__(FFWSG2TopicBridge)
+    bridge.state_publisher = Mock()
+    bridge.camera_publishers = Mock()
+    bridge.camera_publishers.publish.return_value = True
+
+    assert bridge.publish_observations() is True
+    bridge.state_publisher.publish_all.assert_called_once_with()
+    bridge.camera_publishers.publish.assert_called_once_with()

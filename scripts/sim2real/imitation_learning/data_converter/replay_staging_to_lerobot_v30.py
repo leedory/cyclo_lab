@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate reviewed replay staging and write a LeRobot v3 dataset."""
+"""Validate canonical replay staging and write a LeRobot v3 dataset."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 from typing import Any, Mapping, Sequence
 
 
@@ -20,17 +19,12 @@ STAGING_SCHEMA = "cyclo.isaac_action_replay_staging.v1"
 ACTION_SEMANTICS = "pre_step_raw_absolute_joint_position_command"
 SIDECAR_NAME = "isaac_action_replay_provenance.json"
 
-# Staging videos already contain the captured camera pixel arrays. Preserve
-# their HxW=480x640 layout for ACT instead of applying the SG2 runtime camera
-# rotation a second time during LeRobot conversion.
-CAMERA_ORIENTATION_CONTRACTS: dict[
-    str, dict[str, tuple[tuple[int, int], int]]
-] = {
+CAMERA_SHAPE_CONTRACTS: dict[str, dict[str, tuple[int, int]]] = {
     "ffw_sg2_rev1": {
-        # camera: ((height, width), rotation convention used by video_sync)
-        "cam_left_head": ((480, 640), 0),
-        "cam_left_wrist": ((480, 640), 0),
-        "cam_right_wrist": ((480, 640), 0),
+        # camera: (height, width). Conversion never rotates or resizes video.
+        "cam_left_head": (376, 672),
+        "cam_left_wrist": (640, 480),
+        "cam_right_wrist": (640, 480),
     }
 }
 
@@ -96,38 +90,26 @@ def verify_video(path: Path, expected_frames: int, expected_fps: int) -> dict[st
     }
 
 
-def required_camera_rotation(
+def validate_camera_shape(
     robot_type: str,
     camera: str,
     *,
     input_height: int,
     input_width: int,
-) -> int:
-    """Return the rotation needed to satisfy a robot camera shape contract.
+) -> None:
+    """Require canonical pixels without rotating, resizing, or relabeling."""
 
-    A video that already has the required dimensions is left unchanged. This
-    makes conversion idempotent for recorder videos whose rotation was already
-    baked into the MP4.
-    """
-    contract = CAMERA_ORIENTATION_CONTRACTS.get(robot_type, {}).get(camera)
+    contract = CAMERA_SHAPE_CONTRACTS.get(robot_type, {}).get(camera)
     if contract is None:
-        return 0
-
-    (target_height, target_width), rotation_deg = contract
-    if (input_height, input_width) == (target_height, target_width):
-        return 0
-
-    output_height, output_width = input_height, input_width
-    if rotation_deg % 180:
-        output_height, output_width = input_width, input_height
-    if (output_height, output_width) != (target_height, target_width):
         raise ConversionError(
-            f"camera shape cannot satisfy {robot_type} contract for {camera}: "
-            f"input={(input_height, input_width)}, "
-            f"rotation={rotation_deg}, "
-            f"expected={(target_height, target_width)}"
+            f"no camera shape contract for robot_type={robot_type!r}, camera={camera!r}"
         )
-    return rotation_deg
+    if (input_height, input_width) != contract:
+        raise ConversionError(
+            f"camera shape mismatch for {robot_type}/{camera}: "
+            f"input={(input_height, input_width)}, expected={contract}; "
+            "rotation and resizing are not permitted"
+        )
 
 
 def load_manifest(staging: Path, expected_episodes: int | None) -> dict[str, Any]:
@@ -210,7 +192,6 @@ def write_dataset(
             RosbagToLerobotV30Converter,
             V30ConversionConfig,
         )
-        from cyclo_data.converter.video_sync import remux_selected_frames
     except ImportError as error:
         raise ConversionError(f"Cyclo Intelligence v3 writer import failed: {error}") from error
 
@@ -218,127 +199,84 @@ def write_dataset(
     input_video_checks = []
     policy_video_checks = []
     state_names_reference = None
-    orientation_tmp = tempfile.TemporaryDirectory(
-        prefix="cyclo_lerobot_oriented_videos_"
-    )
-    try:
-        orientation_root = Path(orientation_tmp.name)
-        for record in manifest["episodes"]:
-            state, action, timestamp = load_episode_arrays(staging, record)
-            state_names = [str(name) for name in record["state_names"]]
-            if state_names_reference is None:
-                state_names_reference = state_names
-            elif state_names != state_names_reference:
-                raise ConversionError("observation state names change across episodes")
-            videos = {}
-            input_checks = {}
-            output_checks = {}
-            for camera in cameras:
-                if camera not in record["videos"]:
-                    raise ConversionError(
-                        f"episode {record['episode_index']} is missing camera {camera}"
-                    )
-                video_path = staging / str(record["videos"][camera])
-                input_check = verify_video(video_path, len(timestamp), fps)
-                input_checks[camera] = input_check
-                rotation_deg = required_camera_rotation(
-                    robot_type,
-                    camera,
-                    input_height=int(input_check["height"]),
-                    input_width=int(input_check["width"]),
+    for record in manifest["episodes"]:
+        state, action, timestamp = load_episode_arrays(staging, record)
+        state_names = [str(name) for name in record["state_names"]]
+        if state_names_reference is None:
+            state_names_reference = state_names
+        elif state_names != state_names_reference:
+            raise ConversionError("observation state names change across episodes")
+        videos = {}
+        input_checks = {}
+        output_checks = {}
+        for camera in cameras:
+            if camera not in record["videos"]:
+                raise ConversionError(
+                    f"episode {record['episode_index']} is missing camera {camera}"
                 )
-                policy_video_path = video_path
-                if rotation_deg:
-                    policy_video_path = (
-                        orientation_root
-                        / f"episode_{int(record['episode_index']):06d}"
-                        / f"{camera}.mp4"
-                    )
-                    sync_result = remux_selected_frames(
-                        video_path,
-                        range(len(timestamp)),
-                        policy_video_path,
-                        target_fps=fps,
-                        rotation_deg=rotation_deg,
-                    )
-                    if int(sync_result.frame_count) != len(timestamp):
-                        raise ConversionError(
-                            f"rotated video frame mismatch {policy_video_path}: "
-                            f"{sync_result.frame_count} != {len(timestamp)}"
-                        )
-                policy_check = verify_video(
-                    policy_video_path, len(timestamp), fps
-                )
-                contract = CAMERA_ORIENTATION_CONTRACTS.get(robot_type, {}).get(camera)
-                if contract is not None:
-                    expected_size, _ = contract
-                    actual_size = (
-                        int(policy_check["height"]),
-                        int(policy_check["width"]),
-                    )
-                    if actual_size != expected_size:
-                        raise ConversionError(
-                            f"policy camera shape mismatch for {camera}: "
-                            f"{actual_size} != {expected_size}"
-                        )
-                output_checks[camera] = {
-                    **policy_check,
-                    "rotation_applied_deg": rotation_deg,
-                }
-                videos[camera] = policy_video_path
-            input_video_checks.append(
-                {
-                    "episode_index": int(record["episode_index"]),
-                    "cameras": input_checks,
-                }
+            video_path = staging / str(record["videos"][camera])
+            input_check = verify_video(video_path, len(timestamp), fps)
+            input_checks[camera] = input_check
+            validate_camera_shape(
+                robot_type,
+                camera,
+                input_height=int(input_check["height"]),
+                input_width=int(input_check["width"]),
             )
-            policy_video_checks.append(
-                {
-                    "episode_index": int(record["episode_index"]),
-                    "cameras": output_checks,
-                }
-            )
-            task_text = str(manifest.get("task_instruction") or manifest["task"])
-            episodes.append(
-                EpisodeData(
-                    episode_index=int(record["episode_index"]),
-                    timestamps=timestamp.tolist(),
-                    observation_state=[row for row in state],
-                    action=[row for row in action],
-                    video_files=videos,
-                    tasks=[task_text],
-                    length=len(timestamp),
-                    source_path=staging / "manifest.json",
-                    task_name=task_text,
-                    observation_state_names=state_names,
-                    action_names=state_names,
-                )
-            )
-
-        config = V30ConversionConfig(
-            repo_id=repo_id,
-            output_dir=output,
-            fps=fps,
-            robot_type=robot_type,
-            use_videos=True,
-            selected_cameras=cameras,
-            camera_rotations={camera: 0 for camera in cameras},
-            source_rosbags=[],
-            apply_trim=False,
-            apply_exclude_regions=False,
-            data_file_size_in_mb=100,
-            video_file_size_in_mb=200,
+            output_checks[camera] = {
+                **input_check,
+                "rotation_applied_deg": 0,
+            }
+            videos[camera] = video_path
+        input_video_checks.append(
+            {
+                "episode_index": int(record["episode_index"]),
+                "cameras": input_checks,
+            }
         )
-        writer = RosbagToLerobotV30Converter(config)
-        if not writer.write_from_episodes(episodes):
-            raise ConversionError("Cyclo Intelligence write_from_episodes returned false")
-    finally:
-        orientation_tmp.cleanup()
+        policy_video_checks.append(
+            {
+                "episode_index": int(record["episode_index"]),
+                "cameras": output_checks,
+            }
+        )
+        task_text = str(manifest.get("task_instruction") or manifest["task"])
+        episodes.append(
+            EpisodeData(
+                episode_index=int(record["episode_index"]),
+                timestamps=timestamp.tolist(),
+                observation_state=[row for row in state],
+                action=[row for row in action],
+                video_files=videos,
+                tasks=[task_text],
+                length=len(timestamp),
+                source_path=staging / "manifest.json",
+                task_name=task_text,
+                observation_state_names=state_names,
+                action_names=state_names,
+            )
+        )
+
+    config = V30ConversionConfig(
+        repo_id=repo_id,
+        output_dir=output,
+        fps=fps,
+        robot_type=robot_type,
+        use_videos=True,
+        selected_cameras=cameras,
+        camera_rotations={camera: 0 for camera in cameras},
+        source_rosbags=[],
+        apply_trim=False,
+        apply_exclude_regions=False,
+        data_file_size_in_mb=100,
+        video_file_size_in_mb=200,
+    )
+    writer = RosbagToLerobotV30Converter(config)
+    if not writer.write_from_episodes(episodes):
+        raise ConversionError("Cyclo Intelligence write_from_episodes returned false")
 
     provenance = {
         "schema": "cyclo.isaac_action_replay_lerobot_v30_provenance.v1",
-        "review_status": "unreviewed",
-        "training_ready": False,
         "repo_id": repo_id,
         "robot_type": robot_type,
         "episode_count": len(episodes),
@@ -362,15 +300,11 @@ def write_dataset(
         "source_staging_manifest_sha256": sha256(staging / "manifest.json"),
         "input_video_checks": input_video_checks,
         "policy_video_checks": policy_video_checks,
-        "camera_orientation_contract": {
+        "camera_shape_contract_h_w": {
             camera: {
-                "height": int(size[0]),
-                "width": int(size[1]),
-                "rotation_deg_when_transposed": int(rotation),
+                "height": int(size[0]), "width": int(size[1])
             }
-            for camera, (size, rotation) in CAMERA_ORIENTATION_CONTRACTS.get(
-                robot_type, {}
-            ).items()
+            for camera, size in CAMERA_SHAPE_CONTRACTS.get(robot_type, {}).items()
             if camera in cameras
         },
         "episodes": manifest["episodes"],
@@ -380,10 +314,6 @@ def write_dataset(
         json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
     )
     shutil.copy2(staging / "manifest.json", meta_dir / "source_replay_manifest.json")
-    (output / "REVIEW_REQUIRED.txt").write_text(
-        "This action-replay dataset is structurally validated but has not been visually reviewed.\n",
-        encoding="utf-8",
-    )
     return {
         "dataset": str(output),
         "repo_id": repo_id,

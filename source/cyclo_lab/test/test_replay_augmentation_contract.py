@@ -83,35 +83,45 @@ class ReplayAugmentationContractTest(unittest.TestCase):
         with self.assertRaises(module.ConversionError):
             module.build_reorder_indices(["a", "b"], ["a", "c"])
 
-    def test_sg2_act_camera_contract_preserves_captured_pixel_layout(self):
+    def test_sg2_act_camera_contract_accepts_only_canonical_shapes(self):
         module = load_converter()
 
-        for camera in (
-            "cam_left_head",
-            "cam_left_wrist",
-            "cam_right_wrist",
-        ):
-            self.assertEqual(
-                module.required_camera_rotation(
+        expected = {
+            "cam_left_head": (376, 672),
+            "cam_left_wrist": (640, 480),
+            "cam_right_wrist": (640, 480),
+        }
+        self.assertEqual(module.CAMERA_SHAPE_CONTRACTS["ffw_sg2_rev1"], expected)
+        for camera, (height, width) in expected.items():
+            self.assertIsNone(
+                module.validate_camera_shape(
                     "ffw_sg2_rev1",
                     camera,
-                    input_height=480,
-                    input_width=640,
-                ),
-                0,
+                    input_height=height,
+                    input_width=width,
+                )
             )
 
-    def test_sg2_act_camera_contract_rejects_rotated_wrist_shape(self):
+    def test_sg2_act_camera_contract_rejects_transposed_or_legacy_shapes(self):
         module = load_converter()
 
         with self.assertRaisesRegex(
-            module.ConversionError, "camera shape cannot satisfy"
+            module.ConversionError, "rotation and resizing are not permitted"
         ):
-            module.required_camera_rotation(
+            module.validate_camera_shape(
                 "ffw_sg2_rev1",
                 "cam_left_wrist",
-                input_height=640,
-                input_width=480,
+                input_height=480,
+                input_width=640,
+            )
+        with self.assertRaisesRegex(
+            module.ConversionError, "rotation and resizing are not permitted"
+        ):
+            module.validate_camera_shape(
+                "ffw_sg2_rev1",
+                "cam_left_head",
+                input_height=480,
+                input_width=640,
             )
 
 

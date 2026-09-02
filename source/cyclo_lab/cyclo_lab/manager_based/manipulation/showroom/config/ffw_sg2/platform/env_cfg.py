@@ -25,6 +25,7 @@ from .robot_cfg import (
     SG2_SHOWROOM_INITIAL_JOINT_POSITIONS,
     apply_sg2_showroom_camera_profile,
     enable_sg2_showroom_operator_cameras,
+    enable_sg2_showroom_ui_session_camera,
     make_sg2_showroom_robot_cfg,
 )
 from .scene_cfg import ShowroomEnvCfg
@@ -91,6 +92,10 @@ class FFWSG2ShowroomEnvCfg(ShowroomEnvCfg):
     def enable_operator_preview_cameras(self) -> None:
         """Enable the robot-following cameras used only by the operator dashboard."""
         enable_sg2_showroom_operator_cameras(self)
+
+    def enable_ui_session_camera(self) -> None:
+        """Enable only the external camera streamed to Cyclo Intelligence."""
+        enable_sg2_showroom_ui_session_camera(self)
 
 
 @configclass

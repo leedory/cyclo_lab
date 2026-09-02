@@ -103,6 +103,7 @@ from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.platform.repla
 )
 
 from policy_staging_common import (
+    CANONICAL_CAMERA_SHAPES,
     CAMERA_ROTATION_DEG,
     POLICY_ACTION_SEMANTICS,
     POLICY_CONTRACT_ID,
@@ -567,6 +568,7 @@ def load_resume_manifest(
         "seed",
         "fps",
         "camera_map",
+        "camera_shapes_h_w",
         "camera_rotation_deg",
         "camera_refresh_updates",
         "action_semantics",
@@ -701,8 +703,6 @@ def main() -> None:
         fresh_manifest: dict[str, Any] = {
             "schema": STAGING_SCHEMA,
             "created_utc": utc_now(),
-            "status": "task525_visual_replay_unreviewed",
-            "training_ready": False,
             "source_hdf": str(input_path),
             "source_hdf_sha256": sha256(input_path),
             "source_episode_count": len(names),
@@ -731,6 +731,7 @@ def main() -> None:
             "seed": args.seed,
             "fps": contract["fps"],
             "camera_map": CAMERA_MAP,
+            "camera_shapes_h_w": CANONICAL_CAMERA_SHAPES,
             "camera_rotation_deg": CAMERA_ROTATION_DEG,
             "camera_refresh_updates": args.camera_refresh_updates,
             "action_semantics": STAGING_ACTION_SEMANTICS,

@@ -13,6 +13,9 @@ import time
 from isaaclab.app import AppLauncher
 
 
+DEFAULT_UI_SESSION_STATUS_FILE = "/tmp/cyclo_lab_ui_session.json"
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", required=True, help="Registered Cyclo Gym task ID.")
 parser.add_argument(
@@ -59,8 +62,25 @@ parser.add_argument(
     default=0.40,
     help="Keyboard mobile-base yaw speed in rad/s (default: 0.40).",
 )
+parser.add_argument(
+    "--ui-session",
+    action="store_true",
+    help="Run as a resettable, status-reporting FFW-SG2 session owned by the UI.",
+)
+parser.add_argument(
+    "--session-status-file",
+    default=DEFAULT_UI_SESSION_STATUS_FILE,
+    help=(
+        "Atomic JSON status path used by --ui-session "
+        f"(default: {DEFAULT_UI_SESSION_STATUS_FILE})."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if args_cli.ui_session:
+    if args_cli.bridge != "ffw_sg2":
+        parser.error("--ui-session requires --bridge ffw_sg2.")
+    args_cli.enable_cameras = True
 if args_cli.camera_view == "operator":
     args_cli.enable_cameras = True
 
@@ -73,9 +93,9 @@ from isaaclab.envs import ManagerBasedEnvCfg
 from isaaclab.managers import RecorderManagerBaseCfg
 from isaaclab.sensors import CameraCfg
 from isaaclab_tasks.utils import parse_env_cfg
-from pynput.keyboard import Listener
 
 import cyclo_lab  # noqa: F401 - registers Cyclo Gym tasks after AppLauncher
+from cyclo_lab.runtime.simulation import SimulationSession
 
 
 class RateLimiter:
@@ -161,6 +181,14 @@ def _camera_publish_hz(env_cfg: ManagerBasedEnvCfg, control_hz: float) -> float:
     return min(15.0, control_hz, render_hz)
 
 
+def _begin_bridge_control_activation(bridge) -> None:
+    """Activate bridges that provide a smooth transition hook."""
+
+    control_activation = getattr(bridge, "begin_control_activation", None)
+    if callable(control_activation):
+        control_activation()
+
+
 def _configure_environment():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     if not isinstance(env_cfg, ManagerBasedEnvCfg):
@@ -177,14 +205,33 @@ def _configure_environment():
             f"sha256={env_cfg.robot_profile_sha256}"
         )
 
+    if args_cli.ui_session:
+        enable_ui_session_camera = getattr(env_cfg, "enable_ui_session_camera", None)
+        if not callable(enable_ui_session_camera):
+            raise ValueError(
+                f"Task {args_cli.task} does not support a UI-session camera."
+            )
+        enable_ui_session_camera()
+    elif args_cli.camera_view == "operator":
+        enable_operator_cameras = getattr(env_cfg, "enable_operator_preview_cameras", None)
+        if callable(enable_operator_cameras):
+            enable_operator_cameras()
+
     camera_names = _set_camera_sensors_enabled(env_cfg, args_cli.enable_cameras)
     if args_cli.enable_cameras and not camera_names:
         raise ValueError(f"Task {args_cli.task} does not expose configurable camera sensors.")
 
+    if args_cli.ui_session:
+        from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_CAMERA_TOPICS
+
+        missing_bridge_cameras = sorted(set(FFW_SG2_CAMERA_TOPICS).difference(camera_names))
+        if missing_bridge_cameras:
+            raise ValueError(
+                f"Task {args_cli.task} is missing UI-session bridge cameras: "
+                f"{missing_bridge_cameras}"
+            )
+
     if args_cli.camera_view == "operator":
-        enable_operator_cameras = getattr(env_cfg, "enable_operator_preview_cameras", None)
-        if enable_operator_cameras is not None:
-            enable_operator_cameras()
         if not getattr(env_cfg, "operator_camera_rows", None):
             raise ValueError(f"Task {args_cli.task} does not support --camera_view operator.")
     return env_cfg
@@ -217,7 +264,7 @@ def _make_bridge(env, camera_hz: float):
 
 
 def _make_operator_view(env_cfg, env):
-    if args_cli.camera_view != "operator":
+    if args_cli.ui_session or args_cli.camera_view != "operator":
         return None
     from cyclo_lab.runtime.viewers import CameraDashboard
 
@@ -244,6 +291,15 @@ def main() -> None:
     bridge = None
     operator_view = None
     keyboard_listener = None
+    session = (
+        SimulationSession(
+            task=args_cli.task,
+            bridge=args_cli.bridge,
+            status_file=args_cli.session_status_file,
+        )
+        if args_cli.ui_session
+        else None
+    )
     shutdown_requested = threading.Event()
     keyboard_start_requested = threading.Event()
     keyboard_reset_requested = threading.Event()
@@ -292,8 +348,11 @@ def main() -> None:
             dtype=torch.float32,
         )
         operator_view = _make_operator_view(env_cfg, env)
-        keyboard_listener = Listener(on_press=_on_key_press, on_release=_on_key_release)
-        keyboard_listener.start()
+        if not args_cli.ui_session:
+            from pynput.keyboard import Listener
+
+            keyboard_listener = Listener(on_press=_on_key_press, on_release=_on_key_release)
+            keyboard_listener.start()
 
         has_mobile_action = (
             "base_action" in env.action_manager.active_terms
@@ -311,7 +370,14 @@ def main() -> None:
 
         requires_activation = bool(getattr(bridge, "requires_activation", True)) if bridge else False
         control_enabled = bridge is not None and not requires_activation
-        if bridge is None:
+        if args_cli.ui_session:
+            _begin_bridge_control_activation(bridge)
+            control_enabled = True
+            print(
+                "[Control] UI-launched simulation session; policy actions are active "
+                "and remain active after reset."
+            )
+        elif bridge is None:
             print("[Control] Zero-action mode; press R to reset the environment.")
         elif requires_activation:
             print("[Control] Press B to enable robot actions; press R to reset and stop actions.")
@@ -324,6 +390,11 @@ def main() -> None:
         start_time = report_start
         report_steps = 0
         total_steps = 0
+        observation_sequence = 0
+        camera_sequence = 0
+        force_heartbeat_after_reset = False
+        if session is not None:
+            session.ready(control_hz=control_hz, camera_hz=camera_hz)
 
         with torch.inference_mode():
             while simulation_app.is_running() and not shutdown_requested.is_set():
@@ -344,13 +415,19 @@ def main() -> None:
                         keyboard_mobile_keys.clear()
                     reset_source = "R key" if keyboard_reset else "/simulation/reset"
                     print(f"[Control] Reset requested by {reset_source}.")
+                    if session is not None:
+                        session.begin_reset(reset_source)
                     env.reset()
                     if bridge is not None:
                         bridge.reset()
+                        if args_cli.ui_session:
+                            _begin_bridge_control_activation(bridge)
+                            control_enabled = True
+                    if session is not None:
+                        session.finish_reset()
+                        force_heartbeat_after_reset = True
                 elif bridge is not None and requires_activation and start_requested and not control_enabled:
-                    control_activation = getattr(bridge, "begin_control_activation", None)
-                    if callable(control_activation):
-                        control_activation()
+                    _begin_bridge_control_activation(bridge)
                     control_enabled = True
                     print("[Control] Robot actions enabled.")
 
@@ -375,13 +452,29 @@ def main() -> None:
                             keyboard_command, device=env.device, dtype=action.dtype
                         )
                 env.step(action)
+                camera_batch_published = False
                 if bridge is not None:
-                    bridge.publish_observations()
+                    camera_batch_published = bridge.publish_observations()
+                    observation_sequence += 1
+                    if camera_batch_published:
+                        camera_sequence += 1
                 if operator_view is not None:
                     operator_view.update()
 
                 total_steps += 1
                 report_steps += 1
+                if session is not None:
+                    force_session_heartbeat = (
+                        force_heartbeat_after_reset and camera_batch_published
+                    )
+                    session.heartbeat(
+                        total_steps,
+                        observation_sequence=observation_sequence,
+                        camera_sequence=camera_sequence,
+                        force=force_session_heartbeat,
+                    )
+                    if force_session_heartbeat:
+                        force_heartbeat_after_reset = False
                 if report_interval and report_steps >= report_interval:
                     now = time.perf_counter()
                     elapsed = max(now - report_start, 1e-9)
@@ -393,18 +486,32 @@ def main() -> None:
                 rate_limiter.sleep()
     except KeyboardInterrupt:
         print("\n[INFO] Bringup interrupted.")
+    except Exception as exc:
+        if session is not None:
+            session.fail(exc)
+        raise
     finally:
-        if keyboard_listener is not None:
-            keyboard_listener.stop()
-            keyboard_listener.join(timeout=1.0)
-        if operator_view is not None:
-            operator_view.close()
-        if bridge is not None:
-            bridge.close()
-        if env is not None:
-            env.close()
-        for shutdown_signal, previous_handler in previous_signal_handlers.items():
-            signal.signal(shutdown_signal, previous_handler)
+        if session is not None:
+            session.stopping()
+        try:
+            if keyboard_listener is not None:
+                keyboard_listener.stop()
+                keyboard_listener.join(timeout=1.0)
+            if operator_view is not None:
+                operator_view.close()
+            if bridge is not None:
+                bridge.close()
+            if env is not None:
+                env.close()
+            for shutdown_signal, previous_handler in previous_signal_handlers.items():
+                signal.signal(shutdown_signal, previous_handler)
+        except Exception as exc:
+            if session is not None:
+                session.fail(exc)
+            raise
+        else:
+            if session is not None:
+                session.stopped()
 
 
 if __name__ == "__main__":
