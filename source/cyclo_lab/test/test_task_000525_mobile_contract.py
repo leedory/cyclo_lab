@@ -252,6 +252,10 @@ class Task000525MobileContractTest(unittest.TestCase):
         self.assertIn("build_navigation_scene(", local)
         self.assertIn("plan_navigation_path(", local)
         self.assertIn('"navigation_entry"', local)
+        self.assertIn("TASK000525_MAX_PRE_NAV_ROOT_XY_DISPLACEMENT_M = 0.005", local)
+        self.assertIn('"carry_root_xy_max_displacement_m"', local)
+        self.assertIn("possible arm-cabinet contact", local)
+        self.assertIn('"task525_generation_quality_gate_v2"', local)
         self.assertIn("--active_side right", launcher)
         self.assertIn("--navigation_mode fixed_yaw_holonomic", launcher)
         self.assertIn("--approach_distance 0.0", launcher)
@@ -354,6 +358,22 @@ class Task000525MobileContractTest(unittest.TestCase):
         self.assertIn("HDF5DatasetFileHandler", source)
         self.assertIn("replay_dataset(", source)
         self.assertIn("body_delta(initial, final)", source)
+
+    def test_visual_replay_holds_finished_padded_episode_state(self):
+        source = (
+            REPO
+            / "scripts"
+            / "sim2real"
+            / "imitation_learning"
+            / "tasks"
+            / "task_000525"
+            / "replay_visual_policy_staging.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "post_step[min(step - 1, len(post_step) - 1)]",
+            source,
+        )
+        self.assertIn("shorter padded env is inactive", source)
 
 
 if __name__ == "__main__":

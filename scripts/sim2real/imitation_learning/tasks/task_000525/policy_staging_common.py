@@ -33,6 +33,10 @@ CAMERA_ROTATION_DEG = {
 POLICY_INSTRUCTIONS = {
     "pick": "Pick the green coffee can out of the cabinet and carry it to the home pose.",
     "mobile_ccw": "Navigate counterclockwise to the dining table while carrying the green coffee can.",
+    "all": (
+        "Pick the green coffee can out of the cabinet, carry it to the dining table, "
+        "place it on the mat, and return to the home pose."
+    ),
 }
 
 
@@ -167,6 +171,8 @@ def phase_bounds(tasks: np.ndarray, policy: str) -> tuple[int, int]:
         selected = np.isin(tasks, (0, 1))
     elif policy == "mobile_ccw":
         selected = tasks == 2
+    elif policy == "all":
+        selected = np.isin(tasks, (0, 1, 2, 3, 4))
     else:
         raise Task525PolicyDataError(f"unsupported policy {policy!r}")
     indices = np.flatnonzero(selected)
@@ -183,6 +189,13 @@ def phase_bounds(tasks: np.ndarray, policy: str) -> tuple[int, int]:
             raise Task525PolicyDataError("pick must contain task 0 then task 1 from frame zero")
         if end >= len(tasks) or int(tasks[end]) != 2:
             raise Task525PolicyDataError("pick must end immediately before task 2 navigation")
+    elif policy == "all":
+        if start != 0 or end != len(tasks):
+            raise Task525PolicyDataError("all must cover the complete causal episode")
+        if set(np.unique(tasks).tolist()) != {0, 1, 2, 3, 4}:
+            raise Task525PolicyDataError("all must contain task IDs 0 through 4")
+        if np.any(np.diff(tasks) < 0):
+            raise Task525PolicyDataError("all task IDs must be monotonic")
     return start, end
 
 
@@ -205,7 +218,7 @@ def navigation_evidence(action: np.ndarray, tasks: np.ndarray) -> dict[str, Any]
 def selected_episode_names(data: h5py.Group, policy: str) -> tuple[list[str], dict[str, dict[str, Any]]]:
     names = sorted(data.keys(), key=natural_key)
     evidence: dict[str, dict[str, Any]] = {}
-    if policy == "pick":
+    if policy in ("pick", "all"):
         for name in names:
             _state, action, tasks = derive_policy_arrays(data[name])
             start, end = phase_bounds(tasks, policy)

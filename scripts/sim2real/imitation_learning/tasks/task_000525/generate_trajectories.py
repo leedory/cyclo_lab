@@ -56,6 +56,12 @@ parser.add_argument(
 parser.add_argument("--demo", type=str, default=None, help="The demo in the input dataset to use.")
 parser.add_argument("--num_runs", type=int, default=1, help="The number of trajectories to generate.")
 parser.add_argument(
+    "--seed",
+    type=int,
+    default=20260901,
+    help="Base seed for reproducible source-demo selection and per-attempt reset randomization.",
+)
+parser.add_argument(
     "--successful_runs_only",
     action="store_true",
     help="Count and export only trajectories that pass the environment generation quality gate.",
@@ -220,6 +226,10 @@ class LocomanipulationSDGDataGenerationState(enum.IntEnum):
 
     DONE = 5
     """Task completed"""
+
+
+TASK000525_MAX_PRE_NAV_ROOT_XY_DISPLACEMENT_M = 0.005
+"""Maximum stationary-base root motion allowed before navigation starts."""
 
 
 @configclass
@@ -965,6 +975,7 @@ def replay(
     angle_threshold: float = 0.2,
     approach_distance: float = 1.0,
     randomize_placement: bool = True,
+    episode_seed: int | None = None,
 ) -> tuple[bool, str, dict[str, float]]:
     """Replay a locomanipulation SDG episode with state machine control.
 
@@ -996,7 +1007,12 @@ def replay(
     """
 
     # Initialize environment to starting state
-    env.reset_to(state=input_episode_data.get_initial_state(), env_ids=torch.tensor([0]), is_relative=True)
+    env.reset_to(
+        state=input_episode_data.get_initial_state(),
+        env_ids=torch.tensor([0]),
+        seed=episode_seed,
+        is_relative=True,
+    )
 
     # Capture fixed retarget frames after reset. The target frame must not
     # follow physics contact during grasp/pull-out.
@@ -1068,6 +1084,8 @@ def replay(
         )
     carry_gate_checked = False
     initial_object_pose = target_object_reference.detach().clone()
+    initial_robot_root_pose = env.get_base().get_pose().detach().clone()
+    max_pre_navigation_root_xy_displacement = 0.0
     last_reported_state = None
 
     # Main simulation loop with state machine
@@ -1077,6 +1095,18 @@ def replay(
             print(f"Current state: {current_state.name}, Recording step: {recording_step}")
             last_reported_state = current_state
 
+        if not carry_gate_checked:
+            current_robot_root_pose = env.get_base().get_pose().detach()
+            current_root_xy_displacement = float(
+                torch.linalg.vector_norm(
+                    current_robot_root_pose[0, :2] - initial_robot_root_pose[0, :2]
+                ).item()
+            )
+            max_pre_navigation_root_xy_displacement = max(
+                max_pre_navigation_root_xy_displacement,
+                current_root_xy_displacement,
+            )
+
         if current_state == LocomanipulationSDGDataGenerationState.NAVIGATE and not carry_gate_checked:
             carry_gate_checked = True
             carry_ok, failure_reason, carry_metrics = env.evaluate_task525_carry_checkpoint(
@@ -1084,15 +1114,34 @@ def replay(
                 navigate_step,
                 initial_object_pose,
             )
+            root_delta_xy = current_robot_root_pose[0, :2] - initial_robot_root_pose[0, :2]
+            root_metrics = {
+                "carry_root_dx_m": float(root_delta_xy[0].item()),
+                "carry_root_dy_m": float(root_delta_xy[1].item()),
+                "carry_root_xy_displacement_m": current_root_xy_displacement,
+                "carry_root_xy_max_displacement_m": max_pre_navigation_root_xy_displacement,
+                "carry_root_xy_limit_m": TASK000525_MAX_PRE_NAV_ROOT_XY_DISPLACEMENT_M,
+            }
+            carry_metrics = {**carry_metrics, **root_metrics}
             if not carry_ok:
                 return (
                     False,
                     failure_reason,
                     {**planning_metrics, **carry_metrics},
                 )
+            if (
+                max_pre_navigation_root_xy_displacement
+                > TASK000525_MAX_PRE_NAV_ROOT_XY_DISPLACEMENT_M
+            ):
+                return (
+                    False,
+                    "carry_checkpoint: robot root moved while base command was zero "
+                    "(possible arm-cabinet contact)",
+                    {**planning_metrics, **carry_metrics},
+                )
 
-            # The can pull-out may move the base slightly through contact. Plan
-            # again from the measured root immediately before navigation.
+            # Replan from the measured root after the allowed sub-5 mm physics
+            # settling, immediately before navigation.
             navigation_plan_started = time.perf_counter()
             try:
                 base_path_helper = plan_navigation_path(
@@ -1209,7 +1258,7 @@ def set_generation_episode_result(
     metadata = dict(getattr(episode, "metadata", {}) or {})
     metadata.update({
         "success": bool(success),
-        "success_criterion_id": "task525_generation_quality_gate_v1",
+        "success_criterion_id": "task525_generation_quality_gate_v2",
         "failure_reason": "" if success else failure_reason,
     })
     metadata.update({f"quality_{key}": float(value) for key, value in metrics.items()})
@@ -1220,6 +1269,9 @@ if __name__ == "__main__":
 
     with torch.no_grad():
 
+        random.seed(args_cli.seed)
+        torch.manual_seed(args_cli.seed)
+
         # Create environment
         if args_cli.task is not None:
             env_name = args_cli.task.split(":")[-1]
@@ -1228,6 +1280,7 @@ if __name__ == "__main__":
 
         env_cfg = parse_env_cfg(env_name, device=args_cli.device, num_envs=1)
         env_cfg.sim.device = "cpu"
+        env_cfg.seed = args_cli.seed
         env_cfg.recorders.dataset_export_dir_path = os.path.dirname(args_cli.output_file)
         env_cfg.recorders.dataset_filename = os.path.basename(args_cli.output_file)
         if args_cli.successful_runs_only:
@@ -1246,6 +1299,7 @@ if __name__ == "__main__":
             successful_runs < args_cli.num_runs if args_cli.successful_runs_only else attempts < args_cli.num_runs
         ):
             attempts += 1
+            episode_seed = args_cli.seed + attempts - 1
 
             if args_cli.demo is None:
                 demo = random.choice(list(input_dataset_file_handler.get_episode_names()))
@@ -1314,7 +1368,9 @@ if __name__ == "__main__":
                 angle_threshold=args_cli.angle_threshold,
                 approach_distance=args_cli.approach_distance,
                 randomize_placement=args_cli.randomize_placement,
+                episode_seed=episode_seed,
             )
+            quality_metrics["generation_seed"] = float(episode_seed)
             set_generation_episode_result(
                 env,
                 success,

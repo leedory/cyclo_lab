@@ -29,7 +29,7 @@ parser.add_argument("--task", required=True)
 parser.add_argument("--input-file", type=Path, required=True)
 parser.add_argument("--output-dir", type=Path, required=True)
 parser.add_argument("--randomization-profile", required=True)
-parser.add_argument("--policy", choices=("pick", "mobile_ccw"), required=True)
+parser.add_argument("--policy", choices=("pick", "mobile_ccw", "all"), required=True)
 parser.add_argument("--repeats", type=int, required=True)
 parser.add_argument("--num-envs", type=int, default=8)
 parser.add_argument("--seed", type=int, default=20260901)
@@ -219,7 +219,15 @@ def source_state_at_step(
         rows = []
         for trajectory in trajectories:
             initial, post_step = trajectory[path]
-            rows.append(initial if step == 0 else post_step[step - 1])
+            if step == 0:
+                rows.append(initial)
+            elif len(post_step) == 0:
+                raise ReplayError(f"recorded trajectory has no state for step {step}")
+            else:
+                # Batches may contain episodes with different lengths. Once a
+                # shorter padded env is inactive, hold its final recorded state
+                # while longer envs finish; active frames are never clamped.
+                rows.append(post_step[min(step - 1, len(post_step) - 1)])
         nested_assign(
             state,
             path,
@@ -707,7 +715,11 @@ def main() -> None:
             "selection_rule": (
                 "tasks 0 and 1 from frame zero through immediately before task 2"
                 if args.policy == "pick"
-                else "task 2 and first non-zero angular_z command > 0"
+                else (
+                    "all task IDs 0 through 4 over the complete causal episode"
+                    if args.policy == "all"
+                    else "task 2 and first non-zero angular_z command > 0"
+                )
             ),
             "selection_evidence": selection_evidence,
             "task": args.task,

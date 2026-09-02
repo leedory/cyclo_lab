@@ -131,7 +131,11 @@ def export(args: argparse.Namespace) -> dict:
             "selection_rule": (
                 "tasks 0 and 1 from frame zero through immediately before task 2"
                 if args.policy == "pick"
-                else "task 2 and first non-zero angular_z command > 0"
+                else (
+                    "all task IDs 0 through 4 over the complete causal episode"
+                    if args.policy == "all"
+                    else "task 2 and first non-zero angular_z command > 0"
+                )
             ),
             "selection_evidence": selection_evidence,
             "task": "Cyclo-Real-Showroom-Task000525-FFW-SG2-v0",
@@ -153,6 +157,7 @@ def export(args: argparse.Namespace) -> dict:
         }
         write_json(output / "manifest.json", manifest)
 
+        pending_episodes = []
         for episode_index, name in enumerate(names):
             group = data[name]
             state, action, tasks, (start, end) = crop_policy_episode(group, args.policy)
@@ -196,8 +201,6 @@ def export(args: argparse.Namespace) -> dict:
                         )
                     )
                 videos[output_camera] = str(video_path.relative_to(output))
-            for job in video_jobs:
-                job.result()
             record = {
                 "episode_index": episode_index,
                 "source_episode": name,
@@ -218,6 +221,15 @@ def export(args: argparse.Namespace) -> dict:
                 "randomization": {"native_hdf5_recording": True},
                 "protected_pose_max_abs_error": {},
             }
+            pending_episodes.append((episode_index, name, length, record, video_jobs))
+
+        # Queue every episode-camera pair before waiting so that workers can
+        # encode several episodes concurrently. Each worker still owns an
+        # independent read-only HDF5 handle, preserving the original data
+        # isolation contract.
+        for episode_index, name, length, record, video_jobs in pending_episodes:
+            for job in video_jobs:
+                job.result()
             manifest["episodes"].append(record)
             manifest["batches"].append(
                 {"episode_index": episode_index, "source_episode": name}
@@ -250,8 +262,11 @@ def parse_args() -> argparse.Namespace:
         "--camera-workers",
         type=int,
         default=3,
-        choices=(1, 2, 3),
-        help="Independent HDF5/video processes used for the three cameras.",
+        choices=(1, 2, 3, 6, 9, 12),
+        help=(
+            "Independent HDF5/video processes scheduled across all "
+            "episode-camera jobs."
+        ),
     )
     return parser.parse_args()
 

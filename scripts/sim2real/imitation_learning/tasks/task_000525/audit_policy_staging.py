@@ -135,7 +135,11 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         if source in native_by_source:
             raise AuditError(f"duplicate native source episode: {source}")
         state, action = load_arrays(native_root, record, fps)
-        expected_tasks = [0, 1] if args.policy == "pick" else [2]
+        expected_tasks = (
+            [0, 1]
+            if args.policy == "pick"
+            else ([0, 1, 2, 3, 4] if args.policy == "all" else [2])
+        )
         if list(record.get("source_task_ids", [])) != expected_tasks:
             raise AuditError(
                 f"{source}: native task IDs {record.get('source_task_ids')} "
@@ -231,7 +235,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", type=Path, required=True)
     parser.add_argument("--augmented", type=Path, required=True)
-    parser.add_argument("--policy", choices=("pick", "mobile_ccw"), required=True)
+    parser.add_argument("--policy", choices=("pick", "mobile_ccw", "all"), required=True)
     parser.add_argument("--expected-sources", type=int, required=True)
     parser.add_argument("--augmented-repeats", type=int, required=True)
     parser.add_argument("--state-atol", type=float, default=1.0e-6)
