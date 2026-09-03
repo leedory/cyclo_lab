@@ -20,6 +20,14 @@ class TestBringupBridgeActivation(unittest.TestCase):
         self.assertIn("control_activation()", source)
         self.assertNotIn("bridge.begin_control_activation()", source)
 
+    def test_sg2_bridge_uses_task_owned_trajectory_groups(self):
+        source = BRINGUP_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'getattr(\n                env_cfg, "sim2real_active_trajectory_groups", None',
+            source,
+        )
+
     def test_ui_session_requires_sg2_and_forces_cameras(self):
         source = BRINGUP_PATH.read_text(encoding="utf-8")
 

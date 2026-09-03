@@ -18,6 +18,7 @@ from ...randomization.cfg import (
     WallAppearanceRandomizationCfg,
     validate_randomization_cfg,
 )
+from .arrangement import validate_region_key
 from .layout import TASK000525_CAN_NAMES, TASK000525_SELECTED_LAYOUT_KEY
 from .spec import TASK_000525_SPEC
 
@@ -28,6 +29,9 @@ class CoffeeRegionRandomizationCfg:
 
     enabled: bool = False
     layout_key: str = TASK000525_SELECTED_LAYOUT_KEY
+    target_region: str | None = "C"
+    sample_positions: bool = True
+    shuffle_distractors: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,8 @@ def validate_task000525_randomization_cfg(
             f"{TASK000525_SELECTED_LAYOUT_KEY!r}, got "
             f"{profile.coffee_positions.layout_key!r}."
         )
+    if profile.coffee_positions.target_region is not None:
+        validate_region_key(profile.coffee_positions.target_region)
     yaw_min, yaw_max = profile.coffee_visual_yaw.yaw_range_rad
     if not (-math.pi <= yaw_min <= yaw_max <= math.pi):
         raise ValueError(
@@ -72,10 +78,33 @@ def validate_task000525_randomization_cfg(
         raise ValueError(f"Unknown Task525 coffee visual objects: {sorted(unknown)}")
 
 
+
 TASK000525_DETERMINISTIC = Task000525RandomizationCfg()
 
+def make_task000525_seed_profile(target_region: str) -> Task000525RandomizationCfg:
+    """Return a fixed-center collection profile for one orange-can region."""
+
+    target_region = validate_region_key(target_region)
+    return Task000525RandomizationCfg(
+        coffee_positions=CoffeeRegionRandomizationCfg(
+            enabled=True,
+            target_region=target_region,
+            sample_positions=False,
+            shuffle_distractors=False,
+        )
+    )
+
+
+TASK000525_SEED_PROFILES = {
+    region_key: make_task000525_seed_profile(region_key)
+    for region_key in ("A", "B", "C", "D")
+}
+
 TASK000525_RECORD_RANDOMIZED = Task000525RandomizationCfg(
-    coffee_positions=CoffeeRegionRandomizationCfg(enabled=True),
+    coffee_positions=CoffeeRegionRandomizationCfg(
+        enabled=True,
+        shuffle_distractors=True,
+    ),
     coffee_visual_yaw=CoffeeVisualYawRandomizationCfg(enabled=True),
 )
 
@@ -88,7 +117,11 @@ TASK000525_PHYSICAL_TRAJECTORY_GENERATION = Task000525RandomizationCfg(
         lateral_y_max_m=0.030,
         yaw_max_rad=math.radians(2.5),
     ),
-    coffee_positions=CoffeeRegionRandomizationCfg(enabled=True),
+    coffee_positions=CoffeeRegionRandomizationCfg(
+        enabled=True,
+        target_region=None,
+        shuffle_distractors=True,
+    ),
 )
 
 # Visual replay augmentation: no robot, rigid-object, furniture, or collision

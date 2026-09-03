@@ -20,10 +20,15 @@ FFW_SG2_ACTION_TOPICS = {
     "lift": LIFT_TOPIC,
     "mobile": CMD_VEL_TOPIC,
 }
-# A3's right tact switch publishes UInt8(2) here when
+# A3's arm tact switches publish UInt8(2) here when
 # ``tact_arm_toggle_only`` is enabled. This is deliberately separate from
-# the continuous right-arm JointTrajectory stream.
+# the continuous arm JointTrajectory streams.
+FFW_SG2_LEFT_ARM_ENABLE_TOPIC = "/leader/left_command"
 FFW_SG2_RIGHT_ARM_ENABLE_TOPIC = "/leader/right_command"
+FFW_SG2_ARM_ENABLE_TOPICS = {
+    "left": FFW_SG2_LEFT_ARM_ENABLE_TOPIC,
+    "right": FFW_SG2_RIGHT_ARM_ENABLE_TOPIC,
+}
 FFW_SG2_JOYSTICK_TRIGGER_TOPIC = "/leader/joystick_controller/tact_trigger"
 FFW_SG2_CAMERA_TOPICS = {
     "cam_head": "/zed/zed_node/left/image_rect_color/compressed",

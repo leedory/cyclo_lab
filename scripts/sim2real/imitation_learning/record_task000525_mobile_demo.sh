@@ -14,4 +14,5 @@ exec "${ISAAC_PYTHON_BIN}" "${RECORDER}" \
   --robot_type FFW_SG2 \
   --task525_phase_markers \
   --task525_base_mode dijkstra \
+  --headless \
   --kit_args "${KIT_ARGS}"

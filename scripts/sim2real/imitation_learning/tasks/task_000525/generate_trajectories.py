@@ -46,11 +46,11 @@ parser.add_argument(
 )
 parser.add_argument(
     "--active_side",
-    choices=("legacy", "left", "right"),
-    default="legacy",
+    choices=("episode", "left", "right"),
+    default="episode",
     help=(
-        "Manipulating hand. 'legacy' preserves the upstream alternating-hand "
-        "behavior; Task525 forces 'right'."
+        "Manipulating hand. The production default reads the side from each "
+        "Task525 seed episode; left/right are strict debugging overrides."
     ),
 )
 parser.add_argument("--demo", type=str, default=None, help="The demo in the input dataset to use.")
@@ -173,6 +173,7 @@ simulation_app = app_launcher.app
 
 import enum
 import gymnasium as gym
+import json
 import random
 import time
 import torch
@@ -200,6 +201,13 @@ from isaaclab_mimic.locomanipulation_sdg.occupancy_map_utils import (
     occupancy_map_add_to_stage,
 )
 from isaaclab_mimic.locomanipulation_sdg.path_utils import ParameterizedPath, plan_path
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.arrangement import (
+    CoffeeArrangement,
+    TASK000525_REGION_KEYS,
+    TASK000525_TARGET_OBJECT,
+    manipulation_side_for_region,
+    validate_region_key,
+)
 from isaaclab_mimic.locomanipulation_sdg.scene_utils import RelativePose, place_randomly
 from isaaclab_mimic.locomanipulation_sdg.transform_utils import transform_inv, transform_mul, transform_relative_pose
 
@@ -589,7 +597,7 @@ def handle_grasp_state(
     recording_step: int,
     lift_step: int,
     output_data: LocomanipulationSDGOutputData,
-    active_side: str = "legacy",
+    active_side: str,
     source_object_reference: torch.Tensor | None = None,
     target_object_reference: torch.Tensor | None = None,
 ) -> tuple[int, LocomanipulationSDGDataGenerationState]:
@@ -620,7 +628,7 @@ def handle_grasp_state(
     target_object_reference = (
         env.get_object().get_pose() if target_object_reference is None else target_object_reference
     )
-    if active_side in ("legacy", "left"):
+    if active_side == "left":
         output_data.left_hand_pose_target = transform_relative_pose(
             recording_item.left_hand_pose_target, source_object_reference, target_object_reference
         )[0]
@@ -655,7 +663,7 @@ def handle_lift_state(
     recording_step: int,
     navigate_step: int,
     output_data: LocomanipulationSDGOutputData,
-    active_side: str = "legacy",
+    active_side: str,
     source_object_reference: torch.Tensor | None = None,
     target_object_reference: torch.Tensor | None = None,
     lift_start_step: int | None = None,
@@ -696,7 +704,7 @@ def handle_lift_state(
     )
     start_step = recording_step if lift_start_step is None else lift_start_step
     blend_alpha = (recording_step - start_step) / max(1, navigate_step - start_step)
-    if active_side in ("legacy", "left"):
+    if active_side == "left":
         left_object_target = transform_relative_pose(
             recording_item.left_hand_pose_target, source_object_reference, target_object_reference
         )[0]
@@ -960,8 +968,8 @@ def replay(
     input_episode_data: EpisodeData,
     lift_step: int,
     navigate_step: int,
+    active_side: str,
     place_step: int | None = None,
-    active_side: str = "legacy",
     draw_visualization: bool = False,
     angular_gain: float = 2.0,
     linear_gain: float = 1.0,
@@ -991,6 +999,7 @@ def replay(
         input_episode_data: Static manipulation episode data to replay
         lift_step: Recording step where lifting phase begins
         navigate_step: Recording step where navigation phase begins
+        active_side: Manipulation arm selected by the seed region contract
         draw_visualization: Whether to visualize occupancy map and path
         angular_gain: Proportional gain for angular velocity control
         linear_gain: Proportional gain for linear velocity control
@@ -1005,6 +1014,9 @@ def replay(
         approach_distance: Buffer distance from final goal (m)
         randomize_placement: Whether to randomize obstacle placement
     """
+
+    if active_side not in ("left", "right"):
+        raise ValueError(f"Task525 active_side must be left or right, got {active_side!r}")
 
     # Initialize environment to starting state
     env.reset_to(
@@ -1244,6 +1256,99 @@ def replay(
     final_ok, final_reason, final_metrics = env.evaluate_task525_final_checkpoint()
     return final_ok, final_reason, {**planning_metrics, **carry_metrics, **final_metrics}
 
+def _metadata_text(value: object, key: str, demo: str) -> str:
+    """Normalize a required scalar HDF5 episode attribute."""
+
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    text = str(value)
+    if not text:
+        raise ValueError(f"{demo}: empty {key} episode metadata")
+    return text
+
+
+def task525_source_groups(input_handler) -> dict[str, list[str]]:
+    """Group seed episodes by A-D target region and validate their arm labels."""
+
+    data_group = input_handler._hdf5_data_group
+    dataset_target = _metadata_text(
+        data_group.attrs.get("target_object_name", ""),
+        "target_object_name",
+        "/data",
+    )
+    if dataset_target != TASK000525_TARGET_OBJECT:
+        raise ValueError(
+            f"Task525 requires target {TASK000525_TARGET_OBJECT}, got {dataset_target!r}"
+        )
+    groups = {region_key: [] for region_key in TASK000525_REGION_KEYS}
+    for demo in input_handler.get_episode_names():
+        metadata = dict(data_group[demo].attrs)
+        if "task525_target_region" not in metadata:
+            raise ValueError(f"{demo}: missing task525_target_region metadata")
+        if "task525_manipulation_side" not in metadata:
+            raise ValueError(f"{demo}: missing task525_manipulation_side metadata")
+        episode_target = _metadata_text(
+            metadata.get("target_object_name", ""),
+            "target_object_name",
+            demo,
+        )
+        if episode_target != TASK000525_TARGET_OBJECT:
+            raise ValueError(
+                f"{demo}: Task525 requires target {TASK000525_TARGET_OBJECT}, "
+                f"got {episode_target!r}"
+            )
+        region = validate_region_key(
+            _metadata_text(metadata["task525_target_region"], "target region", demo)
+        )
+        try:
+            region_to_object = json.loads(
+                _metadata_text(
+                    metadata.get("task525_region_to_object", ""),
+                    "task525_region_to_object",
+                    demo,
+                )
+            )
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"{demo}: invalid task525_region_to_object JSON"
+            ) from error
+        if not isinstance(region_to_object, dict):
+            raise ValueError(f"{demo}: task525_region_to_object must be an object")
+        try:
+            CoffeeArrangement(region, region_to_object)
+        except ValueError as error:
+            raise ValueError(
+                f"{demo}: invalid orange-target arrangement: {error}"
+            ) from error
+        side = _metadata_text(
+            metadata["task525_manipulation_side"], "manipulation side", demo
+        )
+        expected_side = manipulation_side_for_region(region)
+        if side != expected_side:
+            raise ValueError(
+                f"{demo}: region {region} requires {expected_side}, got {side}"
+            )
+        groups[region].append(demo)
+    missing = [region for region, demos in groups.items() if not demos]
+    if missing:
+        raise ValueError(f"Task525 seed dataset is missing regions: {missing}")
+    return groups
+
+
+def select_balanced_source_demo(
+    groups: dict[str, list[str]],
+    selection_index: int,
+) -> str:
+    """Cycle A-D and then cycle demos within each region."""
+
+    region_index = selection_index % len(TASK000525_REGION_KEYS)
+    block_index = selection_index // len(TASK000525_REGION_KEYS)
+    region = TASK000525_REGION_KEYS[region_index]
+    demos = groups[region]
+    return demos[block_index % len(demos)]
+
+
+
 
 def set_generation_episode_result(
     env: LocomanipulationSDGEnv,
@@ -1262,6 +1367,7 @@ def set_generation_episode_result(
         "failure_reason": "" if success else failure_reason,
     })
     metadata.update({f"quality_{key}": float(value) for key, value in metrics.items()})
+    metadata.update(env.task525_episode_metadata())
     episode.metadata = metadata
 
 
@@ -1291,6 +1397,7 @@ if __name__ == "__main__":
         # Load input data
         input_dataset_file_handler = HDF5DatasetFileHandler()
         input_dataset_file_handler.open(args_cli.dataset)
+        source_groups = task525_source_groups(input_dataset_file_handler)
 
         successful_runs = 0
         attempts = 0
@@ -1302,7 +1409,10 @@ if __name__ == "__main__":
             episode_seed = args_cli.seed + attempts - 1
 
             if args_cli.demo is None:
-                demo = random.choice(list(input_dataset_file_handler.get_episode_names()))
+                selection_index = (
+                    successful_runs if args_cli.successful_runs_only else attempts - 1
+                )
+                demo = select_balanced_source_demo(source_groups, selection_index)
             else:
                 demo = args_cli.demo
 
@@ -1313,6 +1423,40 @@ if __name__ == "__main__":
             # recorder stores lift/navigate/place markers as those attributes,
             # so read them from the selected source group explicitly.
             episode_metadata = dict(input_dataset_file_handler._hdf5_data_group[demo].attrs)
+            target_region = validate_region_key(
+                _metadata_text(
+                    episode_metadata.get("task525_target_region", ""),
+                    "task525_target_region",
+                    demo,
+                )
+            )
+            metadata_side = _metadata_text(
+                episode_metadata.get("task525_manipulation_side", ""),
+                "task525_manipulation_side",
+                demo,
+            )
+            expected_side = manipulation_side_for_region(target_region)
+            if metadata_side != expected_side:
+                raise ValueError(
+                    f"{demo}: region {target_region} requires {expected_side}, "
+                    f"got {metadata_side}"
+                )
+            active_side = (
+                metadata_side
+                if args_cli.active_side == "episode"
+                else args_cli.active_side
+            )
+            if active_side != metadata_side:
+                raise ValueError(
+                    f"{demo}: --active_side={active_side} conflicts with "
+                    f"episode metadata {metadata_side}"
+                )
+            env.set_task525_episode_context(
+                target_region=target_region,
+                manipulation_side=active_side,
+                source_demo=demo,
+            )
+
             lift_step = args_cli.lift_step
             navigate_step = args_cli.navigate_step
             place_step = args_cli.place_step
@@ -1330,7 +1474,7 @@ if __name__ == "__main__":
             lift_step, lift_step_source = resolve_grasp_boundary_step(
                 input_episode_data,
                 episode_metadata,
-                args_cli.active_side,
+                active_side,
                 lift_step,
             )
             if lift_step != original_lift_step:
@@ -1354,7 +1498,7 @@ if __name__ == "__main__":
                 lift_step=lift_step,
                 navigate_step=navigate_step,
                 place_step=place_step,
-                active_side=args_cli.active_side,
+                active_side=active_side,
                 draw_visualization=args_cli.draw_visualization,
                 angular_gain=args_cli.angular_gain,
                 linear_gain=args_cli.linear_gain,

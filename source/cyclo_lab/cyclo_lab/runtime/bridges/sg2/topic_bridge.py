@@ -12,6 +12,7 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
     BASE_BODY,
     BASE_FRAME,
     FFW_SG2_ACTION_JOINT_NAMES,
+    FFW_SG2_ARM_ENABLE_TOPICS,
     FFW_SG2_ACTION_TOPICS,
     FFW_SG2_CAMERA_TOPICS,
     FFW_SG2_HEAD_JOINT_NAMES,
@@ -22,7 +23,6 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
     FFW_SG2_PUBLISHED_JOINT_NAMES,
     FFW_SG2_RIGHT_ARM_JOINT_NAMES,
     FFW_SG2_RIGHT_GRIPPER_JOINT_NAMES,
-    FFW_SG2_RIGHT_ARM_ENABLE_TOPIC,
     JOINT_STATES_TOPIC,
     ODOM_FRAME,
     ODOM_TOPIC,
@@ -115,7 +115,7 @@ class FFWSG2TopicBridge:
         # A3 publishes UInt8(2) once per tact press. Unlike a trajectory
         # arrival count, this is an edge event and is safe for an explicit
         # task-local handoff after autonomous motion.
-        self._right_arm_tact_generation = 0
+        self._arm_tact_generation = {"left": 0, "right": 0}
         self._latest_cmd_vel = (0.0, 0.0, 0.0)
         self._last_cmd_vel_time = 0.0
         self._activation_blend_anchor: dict[str, float] | None = None
@@ -131,12 +131,13 @@ class FFWSG2TopicBridge:
             )
             for label in TRAJECTORY_COMMAND_GROUPS
         ]
-        self.subscribers.append(
+        self.subscribers.extend(
             create_subscriber(
-                topic=FFW_SG2_RIGHT_ARM_ENABLE_TOPIC,
+                topic=topic,
                 msg_type=UINT8,
-                callback=self._on_right_arm_enable,
+                callback=lambda msg, side=side: self._on_arm_enable(side, msg),
             )
+            for side, topic in FFW_SG2_ARM_ENABLE_TOPICS.items()
         )
         if self.include_base_action:
             self.subscribers.append(
@@ -208,19 +209,29 @@ class FFWSG2TopicBridge:
         with self._lock:
             return self._trajectory_command_generation[label]
 
-    def _on_right_arm_enable(self, msg) -> None:
-        """Record only a real A3 right-tact toggle, never a stream update."""
+    def _on_arm_enable(self, side: str, msg) -> None:
+        """Record only a real A3 arm-tact toggle, never a stream update."""
 
+        if side not in self._arm_tact_generation:
+            raise KeyError(f"Unknown FFW-SG2 arm side: {side}")
         if msg is None or int(getattr(msg, "data", -1)) != 2:
             return
         with self._lock:
-            self._right_arm_tact_generation += 1
+            self._arm_tact_generation[side] += 1
+
+    def arm_tact_generation(self, side: str) -> int:
+        """Return the count of A3 tact presses observed for one arm."""
+
+        if side not in self._arm_tact_generation:
+            raise KeyError(f"Unknown FFW-SG2 arm side: {side}")
+        with self._lock:
+            return self._arm_tact_generation[side]
+
+    def left_arm_tact_generation(self) -> int:
+        return self.arm_tact_generation("left")
 
     def right_arm_tact_generation(self) -> int:
-        """Return the count of A3 right-tact presses observed by this bridge."""
-
-        with self._lock:
-            return self._right_arm_tact_generation
+        return self.arm_tact_generation("right")
 
     def _on_cmd_vel(self, msg) -> None:
         if msg is None:
@@ -374,7 +385,8 @@ class FFWSG2TopicBridge:
             for label in self._trajectory_commands:
                 self._trajectory_commands[label] = None
                 self._trajectory_command_generation[label] = 0
-            self._right_arm_tact_generation = 0
+            for side in self._arm_tact_generation:
+                self._arm_tact_generation[side] = 0
             self._latest_cmd_vel = (0.0, 0.0, 0.0)
             self._last_cmd_vel_time = 0.0
             self._activation_blend_anchor = None

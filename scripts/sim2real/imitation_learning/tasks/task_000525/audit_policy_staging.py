@@ -13,6 +13,8 @@ from typing import Any
 
 import numpy as np
 
+from policy_staging_common import POLICY_TARGET_OBJECT_NAME
+
 
 class AuditError(RuntimeError):
     pass
@@ -124,6 +126,12 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     )
     if native.get("policy") != args.policy or augmented.get("policy") != args.policy:
         raise AuditError("manifest policy does not match --policy")
+    for label, manifest in (("native", native), ("augmented", augmented)):
+        target_object = manifest.get("target_object_name")
+        if target_object != POLICY_TARGET_OBJECT_NAME:
+            raise AuditError(
+                f"{label} manifest target {target_object!r} != {POLICY_TARGET_OBJECT_NAME!r}"
+            )
     if float(native["fps"]) != float(augmented["fps"]):
         raise AuditError("native/augmented fps mismatch")
     fps = float(native["fps"])

@@ -2,6 +2,8 @@
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from random import Random
+from types import ModuleType
 import sys
 import unittest
 
@@ -18,6 +20,7 @@ LAYOUT_PATH = (
     / "task_000525"
     / "layout.py"
 )
+ARRANGEMENT_PATH = LAYOUT_PATH.with_name("arrangement.py")
 
 
 def _load_layout_module():
@@ -30,12 +33,29 @@ def _load_layout_module():
     return module
 
 
+def _load_arrangement_module(layout):
+    package_name = "task000525_contract"
+    package = ModuleType(package_name)
+    package.__path__ = [str(LAYOUT_PATH.parent)]
+    sys.modules[package_name] = package
+    sys.modules[f"{package_name}.layout"] = layout
+    module_name = f"{package_name}.arrangement"
+    spec = spec_from_file_location(module_name, ARRANGEMENT_PATH)
+    module = module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class Task000525LayoutTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.layout = _load_layout_module()
+        cls.arrangement = _load_arrangement_module(cls.layout)
 
     def test_requested_can_names_and_four_regions(self):
+        self.assertEqual(self.layout.TASK000525_REGION_KEYS, ("A", "B", "C", "D"))
         self.assertEqual(
             self.layout.TASK000525_CAN_NAMES,
             (
@@ -46,7 +66,31 @@ class Task000525LayoutTest(unittest.TestCase):
             ),
         )
         for key in ("A", "B", "C"):
-            self.assertEqual(len(self.layout.candidate_sampling_regions(key)), 4)
+            regions = self.layout.candidate_sampling_regions(key)
+            self.assertEqual(len(regions), 4)
+            self.assertEqual(
+                tuple(region.region_key for region in regions), ("A", "B", "C", "D")
+            )
+
+    def test_orange_target_and_arm_policy_are_stable_across_regions(self):
+        for index, region in enumerate(("A", "B", "C", "D")):
+            arrangement = self.arrangement.make_coffee_arrangement(
+                region,
+                shuffle_distractors=True,
+                rng=Random(index),
+            )
+            self.assertEqual(
+                arrangement.region_to_object[region],
+                "coffee_can_orange",
+            )
+            self.assertEqual(
+                arrangement.manipulation_side,
+                "left" if region in ("A", "B") else "right",
+            )
+            self.assertEqual(
+                set(arrangement.region_to_object.values()),
+                set(self.layout.TASK000525_CAN_NAMES),
+            )
 
     def test_all_candidate_regions_stay_inside_measured_shelf(self):
         shelf = self.layout.TASK000525_SHELF_BOUNDS

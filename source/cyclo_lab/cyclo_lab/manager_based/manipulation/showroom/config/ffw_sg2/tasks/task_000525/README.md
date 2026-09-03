@@ -1,18 +1,19 @@
 # Task000525
 
-Task000525 moves the green coffee can from kolbjorn_cabinet_02 to the fixed
-ivory mat on central_dining_set with the SG2 right arm and mobile base.
+Task000525 moves the orange coffee can from kolbjorn_cabinet_02 to the fixed
+ivory mat on central_dining_set. Regions A/B use the left arm end-to-end;
+regions C/D use the right arm end-to-end.
 
 ## Runtime contract
 
 - robot asset: FFW_SG2_softgripper.usd;
-- target: coffee_can_green;
-- can order at reset: black, brown, green, orange from low to high world Y;
+- target: coffee_can_orange;
+- region order: A, B, C, D from low to high world Y;
 - approved can-center layout: candidate B;
-- action width: joint19 plus body-frame [vx, vy, wz] = 22;
+- generation action width: dual EEF poses/grippers 16 + passive joints 3 + body velocity 3 = 22;
 - control/output/camera rate: 15 Hz;
 - physics rate: 30 Hz, giving two physics substeps per output action;
-- active manipulation arm: right.
+- active manipulation arm: A/B left, C/D right, from episode metadata.
 
 There is no manipulation source-frame repeat option. One source frame advances
 per 15 Hz environment step. Posture-biased IK is still recomputed at both
@@ -35,6 +36,7 @@ and its KR counterpart.
 | Question | Authoritative file |
 | --- | --- |
 | identity, target, cameras, rates | spec.py |
+| region/object/arm arrangement | arrangement.py |
 | B-region geometry and selected layout | layout.py |
 | complete randomization profiles | profiles.py |
 | reset wiring and base environment | env_cfg.py |
@@ -57,10 +59,13 @@ separate coffee-position or coffee-yaw booleans.
 | Profile | Physical axes | Appearance axes |
 | --- | --- | --- |
 | TASK000525_DETERMINISTIC | none | none |
-| TASK000525_RECORD_RANDOMIZED | four can centers in B regions | can visual yaw |
-| TASK000525_PHYSICAL_TRAJECTORY_GENERATION | root X/Y +/-30 mm, yaw +/-2.5 degrees, can B regions | none |
+| TASK000525_RECORD_RANDOMIZED | orange in C, distractor permutation, sampled centers | can visual yaw |
+| TASK000525_PHYSICAL_TRAJECTORY_GENERATION | root X/Y +/-30 mm, yaw +/-2.5 degrees, sampled A-D can regions | none |
 | TASK000525_VISUAL_REPLAY_AUGMENTATION | none | lighting, wall, cameras, can visual yaw |
 
+
+Seed profiles A-D use fixed rectangle centers. Physical generation preserves
+the source seed's target region, samples all centers, and permutes distractors.
 The canonical Gym ID is
 Cyclo-Real-Showroom-Task000525-Trajectory-Generation-FFW-SG2-v0.
 
@@ -118,7 +123,7 @@ evaluate_task525_final_checkpoint() in locomanipulation_sdg_env.py.
 
 Carry checkpoint:
 
-- right TCP-to-can distance <= 0.080 m;
+- active TCP-to-can distance <= 0.080 m;
 - can displacement from randomized initial pose >= 0.200 m;
 - non-gripper joint19 maximum carry/home error <= 0.150 rad or m.
 
@@ -128,7 +133,7 @@ Final checkpoint:
 - mat-local can-origin Z is in [0.020, 0.090] m;
 - can linear speed <= 0.030 m/s;
 - can angular speed <= 0.250 rad/s;
-- right TCP-to-can distance >= 0.100 m.
+- active TCP-to-can distance >= 0.100 m.
 
 HDF5 episode attributes store success, failure_reason, and every numeric metric
 with a quality_ prefix, including planner provenance.
@@ -175,25 +180,52 @@ Evidence:
 
 ## Commands
 
-Record a continuous seed:
+The Task525 recording wrapper always passes ``--headless`` so Isaac's main
+window stays hidden and only the requested operator camera view is displayed.
+
+Task525 owns head and lift throughout collection: reset and `B` hold the start
+targets, `G` turns the head maximally downward, navigation later lowers the
+lift by 30 cm, and those post-`G` targets remain held while the active arm
+places the can.
+
+Record fixed-center A/B left-arm seeds:
 
 ~~~bash
 ./scripts/sim2real/imitation_learning/record_task000525_mobile_demo.sh \
-  --dataset_file /workspace/cyclo_lab/datasets/task_000525_mobile_seed.hdf5 \
-  --num_demos 1 --camera_view operator --render_episode_cameras
+  --task525_seed_regions A,B --num_demos 2 \
+  --dataset_file /workspace/cyclo_lab/datasets/task_000525_orange_seed_ab.hdf5 \
+  --camera_view operator --render_episode_cameras
+~~~
+
+Record fixed-center C/D right-arm seeds:
+
+~~~bash
+./scripts/sim2real/imitation_learning/record_task000525_mobile_demo.sh \
+  --task525_seed_regions C,D --num_demos 2 \
+  --dataset_file /workspace/cyclo_lab/datasets/task_000525_orange_seed_cd.hdf5 \
+  --camera_view operator --render_episode_cameras
+~~~
+
+Bundle and validate one accepted seed per A-D region:
+
+~~~bash
+/isaac-sim/python.sh scripts/sim2real/imitation_learning/tasks/task_000525/bundle_seed_demos.py \
+  --input datasets/task_000525_orange_seed_ab.hdf5 \
+  --input datasets/task_000525_orange_seed_cd.hdf5 \
+  --output datasets/task_000525_orange_seed_abcd.hdf5
 ~~~
 
 Generate repeat-free 15 Hz trajectories:
 
 ~~~bash
 ./scripts/sim2real/imitation_learning/run_task000525_trajectory_generation.sh \
-  --dataset /workspace/cyclo_lab/datasets/task_000525_mobile_seed_v2.hdf5 \
-  --output_file /workspace/cyclo_lab/datasets/task_000525_trajectory_15hz.hdf5 \
+  --dataset /workspace/cyclo_lab/datasets/task_000525_orange_seed_abcd.hdf5 \
+  --output_file /workspace/cyclo_lab/datasets/task_000525_orange_trajectory_15hz.hdf5 \
   --num_runs 3 --max_attempts 10 --device cpu --headless --enable_cameras
 ~~~
 
 ## Deliberately deferred
 
-- appearance-to-region permutation and target-side-dependent arm selection;
+- visual-only distractor texture permutation beyond the physical entity shuffle;
 - carrying-object swept-volume validation for the complete route;
 - watertight/component-aware soft-finger collision proxies.

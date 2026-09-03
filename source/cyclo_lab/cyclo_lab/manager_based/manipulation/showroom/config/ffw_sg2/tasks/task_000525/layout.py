@@ -17,6 +17,7 @@ TASK000525_CAN_NAMES = (
     "coffee_can_green",
     "coffee_can_orange",
 )
+TASK000525_REGION_KEYS = ("A", "B", "C", "D")
 TASK000525_CAN_RADIUS_M = 0.0335
 TASK000525_CAN_HEIGHT_M = 0.133
 TASK000525_CAN_ORIGIN_ABOVE_BOTTOM_M = 0.045
@@ -69,7 +70,7 @@ class ShelfLayoutParameters:
 
 @dataclass(frozen=True)
 class CenterSamplingRegion:
-    object_name: str
+    region_key: str
     x_min_back_m: float
     x_max_front_m: float
     y_min_m: float
@@ -150,14 +151,14 @@ def build_sampling_regions(
     x_min = bounds.x_min_back_m + back_margin_m
     x_max = bounds.x_max_front_m - front_margin_m
     regions = []
-    for index, object_name in enumerate(TASK000525_CAN_NAMES):
+    for index, region_key in enumerate(TASK000525_REGION_KEYS):
         y_min = bounds.y_min_m + low_y_margin_m + index * (
             region_width_y_m + gap_m
         )
         y_max = y_min + region_width_y_m
         regions.append(
             CenterSamplingRegion(
-                object_name=object_name,
+                region_key=region_key,
                 x_min_back_m=x_min,
                 x_max_front_m=x_max,
                 y_min_m=y_min,

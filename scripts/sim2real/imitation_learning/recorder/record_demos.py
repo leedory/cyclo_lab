@@ -26,6 +26,7 @@ import multiprocessing
 if multiprocessing.get_start_method() != "spawn":
     multiprocessing.set_start_method("spawn", force=True)
 import argparse
+import json
 import contextlib
 from collections import defaultdict
 
@@ -73,6 +74,13 @@ extra_state_topic_group.add_argument(
 )
 parser.set_defaults(publish_extra_state_topics=True)
 parser.add_argument("--profile", action="store_true", help="Print timing statistics for the recording loop.")
+parser.add_argument(
+    "--task525_seed_regions",
+    type=str,
+    help=(
+        "Comma-separated same-arm Task525 seed schedule: A,B for left or C,D for right."
+    ),
+)
 parser.add_argument("--profile_interval", type=int, default=120, help="Loop iterations between profile reports.")
 parser.add_argument(
     "--render_episode_cameras",
@@ -157,7 +165,12 @@ import gymnasium as gym
 
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
-from isaaclab.managers import DatasetExportMode, RecorderTerm, TerminationTermCfg
+from isaaclab.managers import (
+    DatasetExportMode,
+    EventTermCfg as EventTerm,
+    RecorderTerm,
+    TerminationTermCfg,
+)
 
 import cyclo_lab
 import os
@@ -167,14 +180,28 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
     FFW_SG2_JOINT_POSITION_LIMITS,
     FFW_SG2_LIFT_POSITION_UPPER,
 )
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.arrangement import (
+    TASK000525_REGION_TO_SIDE,
+    manipulation_side_for_region,
+    validate_region_key,
+)
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.profiles import (
+    TASK000525_SEED_PROFILES,
+)
 from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.home_pose import (
     TASK000525_SAVE_POSE_3_JOINT_POSITIONS,
+)
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.reset_events import (
+    randomize_coffee_can_center_regions,
 )
 
 from recorder_manager.recorder_manager import StreamingRecorderManager
 
 
-TASK525_RIGHT_GRIPPER_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("gripper_r_joint1")
+TASK525_GRIPPER_ACTION_INDEX = {
+    "left": FFW_SG2_ACTION_JOINT_NAMES.index("gripper_l_joint1"),
+    "right": FFW_SG2_ACTION_JOINT_NAMES.index("gripper_r_joint1"),
+}
 TASK525_HEAD_PITCH_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("head_joint1")
 TASK525_HEAD_YAW_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("head_joint2")
 TASK525_LIFT_ACTION_INDEX = FFW_SG2_ACTION_JOINT_NAMES.index("lift_joint")
@@ -473,9 +500,62 @@ def main():
     # create directory if it does not exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+    task525_markers_enabled = bool(args_cli.task525_phase_markers)
+    task525_seed_regions: tuple[str, ...] = ()
+    task525_active_side: str | None = None
+    if task525_markers_enabled:
+        if args_cli.robot_type != "FFW_SG2" or "Task000525" not in args_cli.task:
+            raise ValueError(
+                "--task525_phase_markers is only valid for the FFW_SG2 "
+                "Task000525 environment."
+            )
+        if not args_cli.task525_seed_regions:
+            raise ValueError(
+                "Task525 seed collection requires --task525_seed_regions A,B or C,D"
+            )
+        task525_seed_regions = tuple(
+            validate_region_key(value.strip())
+            for value in args_cli.task525_seed_regions.split(",")
+            if value.strip()
+        )
+        if task525_seed_regions not in (("A", "B"), ("C", "D")):
+            raise ValueError(
+                "Task525 seed schedule must be exactly A,B (left) or C,D (right)"
+            )
+        sides = {
+            manipulation_side_for_region(region)
+            for region in task525_seed_regions
+        }
+        if len(sides) != 1:
+            raise ValueError("One Task525 recorder session must use one manipulation arm")
+        task525_active_side = sides.pop()
+        if args_cli.num_demos != len(task525_seed_regions):
+            raise ValueError(
+                f"Task525 {args_cli.task525_seed_regions} collection requires "
+                f"--num_demos {len(task525_seed_regions)}"
+            )
+    if args_cli.task525_base_mode == "dijkstra" and not task525_markers_enabled:
+        raise ValueError("--task525_base_mode=dijkstra requires --task525_phase_markers.")
+
+
 
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     env_cfg.init_action_cfg("record")
+    if task525_markers_enabled:
+        first_region = task525_seed_regions[0]
+        env_cfg.randomization = TASK000525_SEED_PROFILES[first_region]
+        coffee_positions = env_cfg.randomization.coffee_positions
+        env_cfg.events.randomize_task000525_coffee_positions = EventTerm(
+            func=randomize_coffee_can_center_regions,
+            mode="reset",
+            params={
+                "layout_key": coffee_positions.layout_key,
+                "target_region": None,
+                "sample_positions": coffee_positions.sample_positions,
+                "shuffle_distractors": coffee_positions.shuffle_distractors,
+            },
+        )
+
     env_cfg.seed = args_cli.seed
     task_name = args_cli.task
     if args_cli.camera_view == "operator":
@@ -497,13 +577,11 @@ def main():
 
     # create environment
     env: ManagerBasedRLEnv = gym.make(task_name, cfg=env_cfg).unwrapped
-
-    task525_markers_enabled = bool(args_cli.task525_phase_markers)
+    task525_seed_region_index = 0
     if task525_markers_enabled:
-        if args_cli.robot_type != "FFW_SG2" or "Task000525" not in task_name:
-            raise ValueError("--task525_phase_markers is only valid for the FFW_SG2 Task000525 environment.")
-    if args_cli.task525_base_mode == "dijkstra" and not task525_markers_enabled:
-        raise ValueError("--task525_base_mode=dijkstra requires --task525_phase_markers.")
+        env._task525_target_region = task525_seed_regions[0]
+
+
     if args_cli.task525_base_mode == "dijkstra":
         # The upstream Dijkstra wrapper is an optional Isaac Sim extension and
         # is not loaded by the minimal headless experience by default.
@@ -550,16 +628,6 @@ def main():
             keyboard_mobile=args_cli.keyboard_mobile,
             keyboard_linear_speed=args_cli.keyboard_linear_speed,
             keyboard_angular_speed=args_cli.keyboard_angular_speed,
-            # Task525 collection intentionally uses the physical A3 in
-            # right-only mode. Keep the original left/right topic mapping,
-            # but do not grant the unused left leader ownership at B.
-            # This holds the already-settled reset pose without an offset or
-            # per-joint action rewrite.
-            active_trajectory_groups=(
-                ("right_arm", "head", "lift")
-                if task525_markers_enabled
-                else None
-            ),
         )
     else:
         raise ValueError(
@@ -583,7 +651,19 @@ def main():
     task525_auto_navigation_failure_reported = False
     task525_home_arm_action = None
     task525_place_activation_generation = None
+    def current_task525_region() -> str:
+        if not task525_seed_regions:
+            raise RuntimeError("Task525 seed region schedule is unavailable")
+        return task525_seed_regions[task525_seed_region_index]
+
+    def current_task525_side() -> str:
+        if task525_active_side is None:
+            raise RuntimeError("Task525 manipulation side is unavailable")
+        return task525_active_side
+
+
     task525_reset_joint_hold_target = None
+    task525_head_hold_target = None
     task525_reset_lift_hold_target = None
 
     def task525_save_pose_target() -> torch.Tensor:
@@ -596,6 +676,18 @@ def main():
         return torch.tensor(values, dtype=torch.float32, device=env.device).unsqueeze(0).expand(
             env.num_envs, -1
         ).clone()
+
+    def task525_reset_head_target() -> torch.Tensor:
+        """Return the fixed pre-G head target, independent of A3 cache."""
+
+        save_pose = task525_save_pose_target()
+        return torch.stack(
+            (
+                save_pose[:, TASK525_HEAD_PITCH_ACTION_INDEX],
+                save_pose[:, TASK525_HEAD_YAW_ACTION_INDEX],
+            ),
+            dim=1,
+        )
 
     def task525_reset_lift_target() -> torch.Tensor:
         """Return the known upper/reset lift target, independent of A3 cache."""
@@ -652,7 +744,7 @@ def main():
                     "[Task525] Save refused: missing phase markers "
                     + (
                         f"{missing}. Use G after a stable grasp, wait for automatic carrying-home/navigation, "
-                        "toggle the right tact after arrival, perform place/release, then press N."
+                        f"toggle the {current_task525_side()} tact after arrival, perform place/release, then press N."
                         if args_cli.task525_base_mode == "dijkstra"
                         else f"{missing}. Use F, G, M, stop the manually controlled base, P, place/release, H, "
                         "return home, then press N."
@@ -678,7 +770,7 @@ def main():
         task525_markers["lift_step"] = recorded_step_index
         print(
             f"[Task525] grasp_step={recorded_step_index}, lift_step={recorded_step_index}. "
-            "Remove the can from the cabinet and return the right arm to the carry/home pose."
+            f"Remove the can and return the {current_task525_side()} arm to the carry/home pose."
         )
 
     def mark_lift_step():
@@ -703,7 +795,10 @@ def main():
                 task525_auto_navigation is not None
                 and task525_auto_navigation.awaiting_place_activation
             ):
-                print("[Task525] G ignored: base has arrived; toggle the right A3 tact to enable place.")
+                print(
+                    "[Task525] G ignored: base has arrived; toggle the "
+                    f"{current_task525_side()} A3 tact to enable place."
+                )
                 return
             # F remains an optional, more precise grasp annotation. G is the
             # only required operator signal in automatic mode: it records the
@@ -716,8 +811,8 @@ def main():
             task525_markers["lift_step"] = recorded_step_index
             should_start_task525_auto_navigation = True
             print(
-                "[Task525] G accepted: preserving the closed right gripper, returning the arm to its "
-                "A3-aligned Task525 init/home, then starting Dijkstra navigation."
+                f"[Task525] G accepted: preserving the closed {current_task525_side()} gripper, "
+                "returning both arms to Task525 init/home, then starting Dijkstra navigation."
             )
             return
         if task525_markers["grasp_step"] is None:
@@ -757,7 +852,7 @@ def main():
                 print("[Task525] P ignored: wait for the automatic Dijkstra arrival message first.")
                 return
             task525_markers["place_step"] = recorded_step_index
-            print(f"[Task525] place_step={recorded_step_index}. Begin right-arm place.")
+            print(f"[Task525] place_step={recorded_step_index}. Begin {current_task525_side()}-arm place.")
             return
         wheel_speed_norm = _sg2_wheel_speed_norm(env)
         if wheel_speed_norm > 0.1:
@@ -782,7 +877,7 @@ def main():
         task525_markers["release_step"] = recorded_step_index
         print(
             f"[Task525] release_step={recorded_step_index}. "
-            "Return the right arm to its initial pose, then press N to save."
+            f"Return the {current_task525_side()} arm to its initial pose, then press N to save."
         )
 
     def current_task525_phase() -> int:
@@ -841,7 +936,10 @@ def main():
             ),
             "task525_online_dijkstra": auto_dijkstra,
             "task525_a3_mapping": "original_dual_arm_left_to_left_right_to_right",
-            "task525_collection_arm_usage": "right_only_for_this_recording",
+            "task525_collection_arm_usage": "both_leaders_enabled",
+            "task525_seed_regions": ",".join(task525_seed_regions),
+            "task525_manipulation_side": current_task525_side(),
+            "task525_region_side_policy": json.dumps(TASK000525_REGION_TO_SIDE),
         })
     _set_dataset_metadata(env.recorder_manager, recording_metadata)
 
@@ -849,8 +947,9 @@ def main():
     env.reset()
     teleop_interface.reset()
     if task525_markers_enabled and args_cli.task525_base_mode == "dijkstra":
-        # A new recorder process must start at the reset height even if the
-        # A3 lift leader still publishes the previous episode's lowered pose.
+        # Ignore persistent A3 head/lift targets from the previous episode;
+        # Task525 owns both axes through reset, G, navigation, and place.
+        task525_head_hold_target = task525_reset_head_target()
         task525_reset_lift_hold_target = task525_reset_lift_target()
         task525_reset_joint_hold_target = task525_save_pose_target()
     operator_view = make_operator_view(env_cfg, env)
@@ -897,8 +996,9 @@ def main():
             # must reach the exact specified joint target.
             teleop_interface.begin_control_activation()
             print(
-                "[Task525] B activation: using absolute A3 joint commands for right-arm/head/lift; "
-                "the unused left arm remains at its settled reset pose. No relative offset is used."
+                f"[Task525] B activation: region {current_task525_region()}, "
+                "using absolute A3 commands for both arms; Task525 holds "
+                "head and lift until G."
             )
         if not (task525_markers_enabled and args_cli.task525_base_mode == "dijkstra"):
             # Manual-base collection continues to expose the original lift
@@ -954,6 +1054,22 @@ def main():
                             episode_metadata["operator_accepted"] = True
                             if task525_markers_enabled:
                                 episode_metadata.update(task525_markers)
+                                arrangement = getattr(
+                                    env, "_task525_arrangements", {}
+                                ).get(0, {})
+                                episode_metadata.update(
+                                    {
+                                        "target_side": current_task525_side(),
+                                        "task525_arrangement_version": 1,
+                                        "task525_target_region": current_task525_region(),
+                                        "task525_manipulation_side": current_task525_side(),
+                                        "task525_region_to_object": json.dumps(
+                                            arrangement.get("region_to_object", {}),
+                                            sort_keys=True,
+                                        ),
+                                    }
+                                )
+
                             for ep in getattr(env.recorder_manager, "_episodes", {}).values():
                                 if ep is not None and not ep.is_empty():
                                     ep.success = True
@@ -964,6 +1080,19 @@ def main():
                         env.recorder_manager.cfg.dataset_export_mode = DatasetExportMode.EXPORT_ALL
                         env.recorder_manager.export_episodes(from_step=False)
                         env.recorder_manager.cfg.dataset_export_mode = DatasetExportMode.EXPORT_NONE
+                        if (
+                            task525_markers_enabled
+                            and task525_seed_region_index + 1
+                            < len(task525_seed_regions)
+                        ):
+                            task525_seed_region_index += 1
+                            env._task525_target_region = current_task525_region()
+                            print(
+                                f"[Task525] Next seed: region "
+                                f"{current_task525_region()} with the "
+                                f"{current_task525_side()} arm."
+                            )
+
                         should_reset_recording_instance = True
                         if env.recorder_manager.exported_successful_episode_count > current_recorded_demo_count:
                             current_recorded_demo_count = env.recorder_manager.exported_successful_episode_count
@@ -975,10 +1104,11 @@ def main():
                         clear_episode_cache("recording")
 
                         env.reset()
-                        # R/N must not replay the old lift target after a
-                        # G-driven lower. Hold the freshly reset lift until
-                        # the next B deliberately starts a new collection.
+                        # R/N must not replay old A3 head/lift targets after a
+                        # G-driven transition. Restore the complete Task525
+                        # start posture before the next collection.
                         if task525_markers_enabled:
+                            task525_head_hold_target = task525_reset_head_target()
                             task525_reset_lift_hold_target = task525_reset_lift_target()
                             task525_reset_joint_hold_target = task525_save_pose_target()
                             teleop_interface.clear_command_cache()
@@ -996,8 +1126,8 @@ def main():
                         start_record_state = False
                         if task525_markers_enabled:
                             print(
-                                "[Task525] Reset complete: lift is held at the reset height until G; "
-                                "only a later G navigation can run the automatic 30 cm lower."
+                                "[Task525] Reset complete: head and lift are held at their start "
+                                "targets; G turns the head down and later lowers the lift by 30 cm."
                             )
                         env.termination_manager.set_term_cfg("success", TerminationTermCfg(func=lambda env: torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)))
                         # print out the current demo count if it has changed
@@ -1040,6 +1170,16 @@ def main():
                         if (
                             task525_markers_enabled
                             and args_cli.task525_base_mode == "dijkstra"
+                            and task525_head_hold_target is not None
+                        ):
+                            head_hold = task525_head_hold_target.to(
+                                device=actions.device, dtype=actions.dtype
+                            )
+                            actions[:, TASK525_HEAD_PITCH_ACTION_INDEX] = head_hold[:, 0]
+                            actions[:, TASK525_HEAD_YAW_ACTION_INDEX] = head_hold[:, 1]
+                        if (
+                            task525_markers_enabled
+                            and args_cli.task525_base_mode == "dijkstra"
                             and task525_reset_lift_hold_target is not None
                         ):
                             actions[:, TASK525_LIFT_ACTION_INDEX] = task525_reset_lift_hold_target.to(
@@ -1065,8 +1205,11 @@ def main():
                             # target. The actual simulated master joint is
                             # the only authoritative grip value at G.
                             measured_action = teleop_interface.get_measured_joint_hold_action()
-                            home_arm_action[:, TASK525_RIGHT_GRIPPER_ACTION_INDEX] = measured_action[
-                                :, TASK525_RIGHT_GRIPPER_ACTION_INDEX
+                            gripper_index = TASK525_GRIPPER_ACTION_INDEX[
+                                current_task525_side()
+                            ]
+                            home_arm_action[:, gripper_index] = measured_action[
+                                :, gripper_index
                             ]
                             # The carry/base segment has no operator head
                             # control: always look maximally downward and
@@ -1075,6 +1218,13 @@ def main():
                                 TASK525_HEAD_PITCH_DOWN_MAX_RAD
                             )
                             home_arm_action[:, TASK525_HEAD_YAW_ACTION_INDEX] = 0.0
+                            task525_head_hold_target = torch.stack(
+                                (
+                                    home_arm_action[:, TASK525_HEAD_PITCH_ACTION_INDEX],
+                                    home_arm_action[:, TASK525_HEAD_YAW_ACTION_INDEX],
+                                ),
+                                dim=1,
+                            ).detach().clone()
                             if task525_auto_navigation.start(actions, home_arm_action=home_arm_action):
                                 task525_markers["place_step"] = None
                                 print(
@@ -1118,24 +1268,33 @@ def main():
                                         :, TASK525_LIFT_ACTION_INDEX
                                     ].detach().clone()
                                 )
-                                task525_place_activation_generation = teleop_interface.right_arm_tact_generation()
+                                task525_place_activation_generation = (
+                                    teleop_interface.arm_tact_generation(
+                                        current_task525_side()
+                                    )
+                                )
                                 print(
                                     "[Task525 AutoNav] Arrived, wheel motion settled, and lift lowered. "
-                                    "Base and arms are held. Press the right A3 tact once to enable right-arm place."
+                                    f"Base and arms are held. Press the {current_task525_side()} "
+                                    "A3 tact once to enable place."
                                 )
                             if task525_auto_navigation.awaiting_place_activation:
                                 if task525_place_activation_generation is None:
-                                    raise RuntimeError("Task525 place handoff is missing its right-arm command snapshot.")
+                                    raise RuntimeError(
+                                        "Task525 place handoff is missing its active-arm tact snapshot."
+                                    )
                                 if (
-                                    teleop_interface.right_arm_tact_generation()
+                                    teleop_interface.arm_tact_generation(
+                                        current_task525_side()
+                                    )
                                     > task525_place_activation_generation
                                 ):
                                     if task525_auto_navigation.enable_place_control():
                                         teleop_interface.begin_control_activation()
                                         task525_markers["place_step"] = recorded_step_index
                                         print(
-                                        "[Task525 AutoNav] Right A3 tact received. "
-                                            "Right-arm place is enabled; base remains held at zero."
+                                            f"[Task525 AutoNav] {current_task525_side().title()} "
+                                            "A3 tact received. Place is enabled; base remains held at zero."
                                         )
                             if (
                                 task525_auto_navigation.status == task525_auto_navigation.FAILED

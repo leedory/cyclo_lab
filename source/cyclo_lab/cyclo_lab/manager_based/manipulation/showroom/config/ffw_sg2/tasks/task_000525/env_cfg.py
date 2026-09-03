@@ -87,6 +87,10 @@ def _remove_authored_showroom_objects(scene_cfg) -> None:
 class Task000525EnvCfg(EpisodicShowroomTaskEnvCfg):
     """Deterministic B-layout centers with 19 joint plus 3 base actions."""
 
+    # Head and lift follow the task-owned G/navigation/place lifecycle. Keep
+    # persistent A3 joystick targets from taking those axes at generic
+    # bringup's B activation; both arms and grippers remain live.
+    sim2real_active_trajectory_groups: tuple[str, ...] = ("left_arm", "right_arm")
     task_spec: ShowroomTaskSpec = TASK_000525_SPEC
     randomization: Task000525RandomizationCfg = TASK000525_DETERMINISTIC
     actions: ContinuousShowroomActionsCfg = ContinuousShowroomActionsCfg()
@@ -151,7 +155,12 @@ class Task000525EnvCfg(EpisodicShowroomTaskEnvCfg):
             self.events.randomize_task000525_coffee_positions = EventTerm(
                 func=randomize_coffee_can_center_regions,
                 mode="reset",
-                params={"layout_key": coffee_positions.layout_key},
+                params={
+                    "layout_key": coffee_positions.layout_key,
+                    "target_region": coffee_positions.target_region,
+                    "sample_positions": coffee_positions.sample_positions,
+                    "shuffle_distractors": coffee_positions.shuffle_distractors,
+                },
             )
         coffee_visual_yaw = self.randomization.coffee_visual_yaw
         if coffee_visual_yaw.enabled:

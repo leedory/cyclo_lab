@@ -102,14 +102,15 @@ class Task000525MobileContractTest(unittest.TestCase):
         self.assertIn('teleop_interface.add_callback("P", mark_task525_place)', recorder)
         self.assertIn('"obs/task525_demo_phase"', recorder)
         self.assertIn('choices=("manual", "dijkstra")', recorder)
-        self.assertIn('G accepted: preserving the closed right gripper', recorder)
-        self.assertIn('home_arm_action[:, TASK525_RIGHT_GRIPPER_ACTION_INDEX]', recorder)
+        self.assertIn('G accepted: preserving the closed {current_task525_side()} gripper', recorder)
+        self.assertIn("TASK525_GRIPPER_ACTION_INDEX", recorder)
+        self.assertIn("current_task525_side()", recorder)
         self.assertIn("TASK525_HEAD_PITCH_DOWN_MAX_RAD", recorder)
         self.assertIn("home_arm_action[:, TASK525_HEAD_PITCH_ACTION_INDEX]", recorder)
         self.assertIn("home_arm_action[:, TASK525_HEAD_YAW_ACTION_INDEX] = 0.0", recorder)
         self.assertIn('get_measured_joint_hold_action', recorder)
-        self.assertIn('Press the right A3 tact once to enable right-arm place', recorder)
-        self.assertIn('right_arm_tact_generation()', recorder)
+        self.assertIn('Press the {current_task525_side()}', recorder)
+        self.assertIn('arm_tact_generation(', recorder)
         self.assertNotIn(
             'teleop_interface.trajectory_command_generation("right_arm")\n                                    > task525_place_activation_generation',
             recorder,
@@ -119,12 +120,15 @@ class Task000525MobileContractTest(unittest.TestCase):
         self.assertIn("TASK525_LIFT_ACTION_INDEX", recorder)
         self.assertIn("task525_reset_lift_hold_target", recorder)
         self.assertIn("def task525_reset_lift_target", recorder)
+        self.assertIn("task525_head_hold_target", recorder)
+        self.assertIn("def task525_reset_head_target", recorder)
+        self.assertIn("head and lift until G.", recorder)
         self.assertIn("def task525_save_pose_target", recorder)
         self.assertIn("task525_reset_joint_hold_target", recorder)
         self.assertIn("task525_home_arm_action = task525_save_pose_target()", recorder)
         self.assertIn("FFW_SG2_LIFT_POSITION_UPPER", recorder)
         self.assertIn("teleop_interface.clear_command_cache()", recorder)
-        self.assertIn("using absolute A3 joint commands", recorder)
+        self.assertIn("using absolute A3 commands for both arms", recorder)
         self.assertNotIn("TASK525_RELATIVE_ARM_JOINT_NAMES", recorder)
         self.assertNotIn("relative_joint_names=", recorder)
 
@@ -142,14 +146,11 @@ class Task000525MobileContractTest(unittest.TestCase):
             'TRAJECTORY_COMMAND_GROUPS = ("left_arm", "right_arm", "head", "lift")',
             bridge,
         )
-        self.assertIn(
-            '("right_arm", "head", "lift")',
-            recorder,
-        )
+        self.assertNotIn('("right_arm", "head", "lift")', recorder)
         self.assertIn('FFW_SG2_ACTION_TOPICS["mobile"]', bridge)
         self.assertIn('def trajectory_command_generation', bridge)
-        self.assertIn('FFW_SG2_RIGHT_ARM_ENABLE_TOPIC', bridge)
-        self.assertIn('def right_arm_tact_generation', bridge)
+        self.assertIn('FFW_SG2_ARM_ENABLE_TOPICS', bridge)
+        self.assertIn('def arm_tact_generation', bridge)
         self.assertIn('int(getattr(msg, "data", -1)) != 2', bridge)
         self.assertIn('def get_measured_joint_hold_action', bridge)
         sdk = (
@@ -243,7 +244,7 @@ class Task000525MobileContractTest(unittest.TestCase):
             / "run_task000525_trajectory_generation.sh"
         ).read_text(encoding="utf-8")
         self.assertNotIn("[Task525]", upstream)
-        self.assertIn('active_side in ("legacy", "left")', local)
+        self.assertIn('if active_side == "left"', local)
         self.assertIn('recorded_base_reference=place_step is not None', local)
         self.assertIn("infer_dropoff_replay_step", local)
         self.assertIn("recording_step = dropoff_replay_step", local)
@@ -256,7 +257,7 @@ class Task000525MobileContractTest(unittest.TestCase):
         self.assertIn('"carry_root_xy_max_displacement_m"', local)
         self.assertIn("possible arm-cabinet contact", local)
         self.assertIn('"task525_generation_quality_gate_v2"', local)
-        self.assertIn("--active_side right", launcher)
+        self.assertNotIn("--active_side right", launcher)
         self.assertIn("--navigation_mode fixed_yaw_holonomic", launcher)
         self.assertIn("--approach_distance 0.0", launcher)
 
@@ -295,7 +296,7 @@ class Task000525MobileContractTest(unittest.TestCase):
             TASK_ROOT.parents[1] / "__init__.py"
         ).read_text(encoding="utf-8")
         self.assertIn("class Task000525LocomanipulationSDGEnv", adapter)
-        self.assertIn("posture_bias_sides=(\"r\",)", adapter)
+        self.assertIn('posture_bias_sides=("l", "r")', adapter)
         mimic_cfg = (
             REPO
             / "source"

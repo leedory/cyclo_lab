@@ -94,16 +94,18 @@ def test_activation_holds_inactive_left_group_at_absolute_reset_target() -> None
     assert bridge._activation_blend_anchor is None
 
 
-def test_right_tact_counter_ignores_non_toggle_enable_messages() -> None:
+def test_arm_tact_counters_ignore_non_toggle_enable_messages() -> None:
     bridge = FFWSG2TopicBridge.__new__(FFWSG2TopicBridge)
     bridge._lock = threading.Lock()
-    bridge._right_arm_tact_generation = 0
+    bridge._arm_tact_generation = {"left": 0, "right": 0}
 
-    bridge._on_right_arm_enable(SimpleNamespace(data=1))
-    bridge._on_right_arm_enable(SimpleNamespace(data=0))
-    bridge._on_right_arm_enable(SimpleNamespace(data=2))
+    bridge._on_arm_enable("left", SimpleNamespace(data=1))
+    bridge._on_arm_enable("left", SimpleNamespace(data=2))
+    bridge._on_arm_enable("right", SimpleNamespace(data=0))
+    bridge._on_arm_enable("right", SimpleNamespace(data=2))
 
-    assert bridge.right_arm_tact_generation() == 1
+    assert bridge.arm_tact_generation("left") == 1
+    assert bridge.arm_tact_generation("right") == 1
 
 
 def test_publish_observations_returns_camera_batch_result() -> None:

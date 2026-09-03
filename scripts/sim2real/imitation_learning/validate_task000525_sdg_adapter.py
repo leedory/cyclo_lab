@@ -28,6 +28,17 @@ from isaaclab_tasks.utils import parse_env_cfg
 import cyclo_lab  # noqa: F401
 from cyclo_lab.robot_specs.ffw.sg2 import hdf5_contract_metadata
 
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.arrangement import (
+    TASK000525_TARGET_OBJECT,
+    manipulation_side_for_region,
+)
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.layout import (
+    TASK000525_SELECTED_LAYOUT_KEY,
+    selected_sampling_regions,
+)
+from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.reset_events import (
+    randomize_coffee_can_center_regions,
+)
 
 TASK = "Cyclo-Real-Showroom-Task000525-Locomanipulation-SDG-FFW-SG2-v0"
 SAFE_TEST_SPAWN = (1.0, 0.7, 0.0)
@@ -100,9 +111,52 @@ def main() -> None:
 
     contract = hdf5_contract_metadata(env.cfg.actions)
     if contract["robot_contract_id"] != (
-        "ffw_sg2_task525_locomanipulation_sdg_eef_hybrid22_v1"
+        "ffw_sg2_task525_locomanipulation_sdg_eef22_v1"
     ):
         raise AssertionError(f"wrong SDG HDF5 contract: {contract}")
+
+    arrangement_report: dict[str, dict[str, object]] = {}
+    env_ids = torch.tensor([0], device=env.device, dtype=torch.long)
+    for region_key in ("A", "B", "C", "D"):
+        expected_side = manipulation_side_for_region(region_key)
+        env.set_task525_episode_context(
+            target_region=region_key,
+            manipulation_side=expected_side,
+            source_demo="runtime_smoke",
+        )
+        randomize_coffee_can_center_regions(
+            env,
+            env_ids,
+            layout_key=TASK000525_SELECTED_LAYOUT_KEY,
+            target_region=region_key,
+            sample_positions=False,
+            shuffle_distractors=True,
+        )
+        env.scene.write_data_to_sim()
+        env.sim.forward()
+        resolved = env._task525_arrangements[0]
+        if resolved["region_to_object"][region_key] != TASK000525_TARGET_OBJECT:
+            raise AssertionError(f"orange target was not placed in region {region_key}")
+        target_region = next(
+            region
+            for region in selected_sampling_regions()
+            if region.region_key == region_key
+        )
+        orange_xy = env.scene[TASK000525_TARGET_OBJECT].data.root_pos_w[0, :2]
+        expected_xy = torch.tensor(
+            target_region.default_position_m[:2],
+            device=env.device,
+            dtype=orange_xy.dtype,
+        )
+        if not torch.allclose(orange_xy, expected_xy, atol=1e-6, rtol=0.0):
+            raise AssertionError(
+                f"region {region_key} orange center mismatch: "
+                f"{orange_xy.tolist()} vs {expected_xy.tolist()}"
+            )
+        arrangement_report[region_key] = {
+            "manipulation_side": expected_side,
+            "region_to_object": resolved["region_to_object"],
+        }
 
     report = {
         "task": TASK,
@@ -126,6 +180,7 @@ def main() -> None:
             "occupied_cells": occupied_cells,
         },
         "passed": True,
+        "arrangements": arrangement_report,
     }
     if args.report_path is not None:
         args.report_path.parent.mkdir(parents=True, exist_ok=True)

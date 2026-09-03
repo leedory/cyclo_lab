@@ -6,19 +6,19 @@ from copy import deepcopy
 
 from cyclo_lab.assets.object import COFFEE_CAN_CFG
 
-from .layout import candidate_sampling_regions
+from .layout import TASK000525_CAN_NAMES, candidate_sampling_regions
 
 
-def make_task000525_coffee_can_cfg(region):
+def make_task000525_coffee_can_cfg(object_name, region):
     """Instantiate one appearance variant at its reviewed default center."""
 
-    appearance = region.object_name.removeprefix("coffee_can_")
+    appearance = object_name.removeprefix("coffee_can_")
     cfg = deepcopy(COFFEE_CAN_CFG)
-    cfg.prim_path = f"{{ENV_REGEX_NS}}/{region.object_name}"
+    cfg.prim_path = f"{{ENV_REGEX_NS}}/{object_name}"
     cfg.spawn.variants = {"appearance": appearance}
     cfg.spawn.semantic_tags = [
         ("class", "coffee_can"),
-        ("instance", region.object_name),
+        ("instance", object_name),
         ("appearance", appearance),
     ]
     cfg.init_state.pos = region.default_position_m
@@ -29,5 +29,6 @@ def make_task000525_coffee_can_cfg(region):
 def iter_task000525_coffee_can_cfgs(layout_key: str):
     """Yield the four scene entities in low-Y to high-Y region order."""
 
-    for region in candidate_sampling_regions(layout_key):
-        yield region.object_name, make_task000525_coffee_can_cfg(region)
+    regions = candidate_sampling_regions(layout_key)
+    for object_name, region in zip(TASK000525_CAN_NAMES, regions):
+        yield object_name, make_task000525_coffee_can_cfg(object_name, region)

@@ -1,9 +1,9 @@
 """Task000525 home pose shared by Isaac reset and the active A3 leader.
 
 The arm/gripper values exactly mirror ``left/right_save_pose_3`` in the
-running A3 right-only controller. R and N use the complete neutral pose. G
+running dual-arm A3 controller. R and N use the complete neutral pose. G
 uses the same arm target but deliberately overrides head, lift, and the
-carrying right gripper in its task-local state machine.
+active carrying gripper in its task-local state machine.
 """
 
 TASK000525_SAVE_POSE_3_JOINT_POSITIONS = {

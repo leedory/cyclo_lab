@@ -11,7 +11,6 @@ KIT_ARGS="--ext-folder ${REPO_ROOT}/source --enable cyclo_lab"
 exec "${ISAAC_PYTHON_BIN}" "${TASK_GENERATOR}" \
   "$@" \
   --task "${TASK_ID}" \
-  --active_side right \
   --navigation_mode fixed_yaw_holonomic \
   --navigation_yaw 0.0 \
   --approach_distance 0.0 \

@@ -22,16 +22,6 @@ FFW_SG2_SDG_ACTION_NAMES = (
     "lift_joint",
     *FFW_SG2_BASE_ACTION_NAMES,
 )
-FFW_SG2_TASK525_HYBRID_ACTION_NAMES = (
-    *FFW_SG2_ACTION_JOINT_NAMES[:8],
-    *(f"right_eef_{component}_robot_root" for component in FFW_SG2_EEF_POSE_COMPONENTS),
-    "gripper_r_joint1",
-    "head_joint1",
-    "head_joint2",
-    "lift_joint",
-    *FFW_SG2_BASE_ACTION_NAMES,
-)
-
 FFW_SG2_MOBILE_ACTION_NAMES = (
     *FFW_SG2_ACTION_JOINT_NAMES,
     *FFW_SG2_BASE_ACTION_NAMES,
@@ -58,16 +48,6 @@ FFW_SG2_SDG_ACTION_UNITS = (
     "m",
     *FFW_SG2_BASE_ACTION_UNITS,
 )
-FFW_SG2_TASK525_HYBRID_ACTION_UNITS = (
-    *("rad",) * 8,
-    *FFW_SG2_EEF_POSE_UNITS,
-    "rad",
-    "rad",
-    "rad",
-    "m",
-    *FFW_SG2_BASE_ACTION_UNITS,
-)
-
 FFW_SG2_MOBILE_ACTION_UNITS = (
     *FFW_SG2_JOINT_ACTION_UNITS,
     *FFW_SG2_BASE_ACTION_UNITS,
@@ -175,16 +155,11 @@ def hdf5_contract_metadata(actions_cfg) -> dict[str, object]:
             "pre_step_dual_eef_pose16_plus_passive_joint3_plus_body_velocity3"
         )
         state_semantics = "measured_joint_position_19_plus_body_velocity_3"
-    elif mobile and ik_right and not ik_left:
-        action_names = FFW_SG2_TASK525_HYBRID_ACTION_NAMES
-        action_units = FFW_SG2_TASK525_HYBRID_ACTION_UNITS
-        state_names = FFW_SG2_MOBILE_ACTION_NAMES
-        state_units = FFW_SG2_MOBILE_ACTION_UNITS
-        contract_id = "ffw_sg2_task525_locomanipulation_sdg_eef_hybrid22_v1"
-        action_semantics = (
-            "pre_step_left_joint8_plus_right_eef_pose7_gripper1_plus_passive_joint3_plus_body_velocity3"
+    elif mobile and (ik_left or ik_right):
+        raise ValueError(
+            "Mobile SG2 SDG actions must configure both arms as EEF IK; "
+            f"got left={ik_left}, right={ik_right}"
         )
-        state_semantics = "measured_joint_position_19_plus_body_velocity_3"
     elif mobile:
         action_names = state_names = FFW_SG2_MOBILE_ACTION_NAMES
         action_units = state_units = FFW_SG2_MOBILE_ACTION_UNITS

@@ -1,7 +1,7 @@
 """Shared contracts for Task000525 phase-specific ACT datasets.
 
-The source generation file stores a hybrid right-EEF action.  ACT must never
-consume that field directly.  This module derives the causal joint19+base3
+The source generation file stores a dual-EEF action. ACT must never consume
+that field directly. This module derives the causal joint19+base3
 policy action and selects the requested contiguous task phase without copying
 the 51 GiB source HDF5.
 """
@@ -35,11 +35,12 @@ CAMERA_ROTATION_DEG = {
     "cam_wrist_left": 0,
     "cam_wrist_right": 0,
 }
+POLICY_TARGET_OBJECT_NAME = "coffee_can_orange"
 POLICY_INSTRUCTIONS = {
-    "pick": "Pick the green coffee can out of the cabinet and carry it to the home pose.",
-    "mobile_ccw": "Navigate counterclockwise to the dining table while carrying the green coffee can.",
+    "pick": "Pick the orange coffee can out of the cabinet and carry it to the home pose.",
+    "mobile_ccw": "Navigate counterclockwise to the dining table while carrying the orange coffee can.",
     "all": (
-        "Pick the green coffee can out of the cabinet, carry it to the dining table, "
+        "Pick the orange coffee can out of the cabinet, carry it to the dining table, "
         "place it on the mat, and return to the home pose."
     ),
 }
@@ -110,6 +111,12 @@ def source_fps(data: h5py.Group) -> int:
 
 
 def validate_source(data: h5py.Group) -> dict[str, Any]:
+    target_object = str(jsonable(data.attrs.get("target_object_name", "")))
+    if target_object != POLICY_TARGET_OBJECT_NAME:
+        raise Task525PolicyDataError(
+            f"Task525 policy source requires target {POLICY_TARGET_OBJECT_NAME}, "
+            f"got {target_object!r}"
+        )
     contract_id = str(jsonable(data.attrs.get("robot_contract_id", "")))
     if "locomanipulation_sdg_eef" not in contract_id:
         raise Task525PolicyDataError(

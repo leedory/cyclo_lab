@@ -237,7 +237,7 @@ def _configure_environment():
     return env_cfg
 
 
-def _make_bridge(env, camera_hz: float):
+def _make_bridge(env_cfg, env, camera_hz: float):
     if args_cli.bridge == "none":
         return None
     if args_cli.bridge == "ffw_sg2":
@@ -248,6 +248,9 @@ def _make_bridge(env, camera_hz: float):
             camera_publish_hz=camera_hz,
             publish_odometry_tf=True,
             subscribe_reset=True,
+            active_trajectory_groups=getattr(
+                env_cfg, "sim2real_active_trajectory_groups", None
+            ),
         )
     if args_cli.bridge == "ffw_sh5":
         from cyclo_lab.runtime.bridges.sh5 import FFWSH5TopicBridge
@@ -341,7 +344,7 @@ def main() -> None:
         env.reset()
         control_hz = _control_hz(env_cfg)
         camera_hz = _camera_publish_hz(env_cfg, control_hz) if args_cli.enable_cameras else 0.0
-        bridge = _make_bridge(env, camera_hz)
+        bridge = _make_bridge(env_cfg, env, camera_hz)
         zero_action = torch.zeros(
             (env.num_envs, env.action_manager.total_action_dim),
             device=env.device,

@@ -52,10 +52,10 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
-    "--source-hybrid-action-replay",
+    "--source-sdg-action-replay",
     action="store_true",
     help=(
-        "Replay the source SDG hybrid22 command through the matching SDG environment, "
+        "Replay the source dual-EEF SDG22 command through the matching SDG environment, "
         "while exporting the derived causal joint22 ACT label."
     ),
 )
@@ -108,6 +108,7 @@ from policy_staging_common import (
     POLICY_ACTION_SEMANTICS,
     POLICY_CONTRACT_ID,
     POLICY_INSTRUCTIONS,
+    POLICY_TARGET_OBJECT_NAME,
     STAGING_ACTION_SEMANTICS,
     STAGING_SCHEMA,
     Task525PolicyDataError,
@@ -657,8 +658,8 @@ def main() -> None:
         raise ReplayError("--repeats and --num-envs must be positive")
     if args.resume_from_episode is not None and not args.resume:
         raise ReplayError("--resume-from-episode requires --resume")
-    if args.source_state_replay and args.source_hybrid_action_replay:
-        raise ReplayError("choose either source state replay or source hybrid action replay")
+    if args.source_state_replay and args.source_sdg_action_replay:
+        raise ReplayError("choose either source state replay or source SDG action replay")
     input_path = args.input_file.resolve()
     output = args.output_dir.resolve()
     if output.exists() and not args.resume:
@@ -686,7 +687,7 @@ def main() -> None:
             raise ReplayError("no source episodes selected")
 
         env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
-        if not args.source_hybrid_action_replay:
+        if not args.source_sdg_action_replay:
             env_cfg.init_action_cfg("record")
         env_cfg.recorders = None
         env_cfg.terminations = None
@@ -724,7 +725,7 @@ def main() -> None:
             "selection_evidence": selection_evidence,
             "task": args.task,
             "task_instruction": POLICY_INSTRUCTIONS[args.policy],
-            "target_object_name": "coffee_can_green",
+            "target_object_name": POLICY_TARGET_OBJECT_NAME,
             "randomization_profile": args.randomization_profile,
             "randomization_profile_values": json_value(profile),
             "repeats": args.repeats,
@@ -742,8 +743,8 @@ def main() -> None:
                     "exact recorded pre-step scene states + derived causal joint22 ACT labels"
                     if args.source_state_replay
                     else (
-                        "source SDG hybrid22 replay actions + derived causal joint22 ACT labels"
-                        if args.source_hybrid_action_replay
+                        "source dual-EEF SDG22 replay actions + derived causal joint22 ACT labels"
+                        if args.source_sdg_action_replay
                         else "derived causal joint22 replay actions and ACT labels"
                     )
                 )
@@ -758,8 +759,8 @@ def main() -> None:
                 "recorded_scene_state"
                 if args.source_state_replay
                 else (
-                    "source_sdg_hybrid22"
-                    if args.source_hybrid_action_replay
+                    "source_sdg_dual_eef22"
+                    if args.source_sdg_action_replay
                     else "derived_policy_joint22"
                 )
             ),
@@ -838,7 +839,7 @@ def main() -> None:
                         policy_rows.append(action)
                         replay_rows.append(
                             np.asarray(data[name]["actions"], dtype=np.float32)
-                            if args.source_hybrid_action_replay
+                            if args.source_sdg_action_replay
                             else action
                         )
                         bounds.append(phase_bounds(tasks, args.policy))

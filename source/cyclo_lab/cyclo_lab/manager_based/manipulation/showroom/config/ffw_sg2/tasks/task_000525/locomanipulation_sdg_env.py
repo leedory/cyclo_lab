@@ -27,12 +27,10 @@ from isaaclab_mimic.locomanipulation_sdg.scene_utils import (
     SceneBody,
 )
 
-from cyclo_lab.manager_based.actions.ffw_sg2 import make_ffw_sg2_joint_position_action_cfg
 from cyclo_lab.manager_based.manipulation.common.ffw_sg2_mimic_action_cfg import (
     configure_ffw_sg2_mimic_ik_actions,
 )
 from cyclo_lab.robot_specs.ffw.sg2 import (
-    FFW_SG2_LEFT_ARM_JOINT_NAMES,
     FFW_SG2_PUBLISHED_JOINT_NAMES,
     hdf5_contract_metadata,
 )
@@ -40,6 +38,11 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
 from ...randomization.task_pose_events import randomize_robot_root
 from .destination_mat import TASK000525_DESTINATION_MAT_DIMENSIONS_M
 from .env_cfg import Task000525EnvCfg
+from .arrangement import (
+    TASK000525_TARGET_OBJECT,
+    manipulation_side_for_region,
+    validate_region_key,
+)
 from .layout import TASK000525_CAN_RADIUS_M
 from .profiles import (
     TASK000525_PHYSICAL_TRAJECTORY_GENERATION,
@@ -122,7 +125,7 @@ class _FixedFixture(HasPose, HasOccupancyMap):
 
 @configclass
 class Task000525LocomanipulationSDGEnvCfg(Task000525EnvCfg):
-    """Task525 scene with hybrid EEF19 + body-velocity3 generation actions."""
+    """Task525 scene with dual-EEF19 + body-velocity3 generation actions."""
 
     env_name: str = "Cyclo-Real-Showroom-Task000525-Locomanipulation-SDG-FFW-SG2-v0"
     recorders: LocomanipulationSDGRecorderManagerCfg = (
@@ -135,13 +138,7 @@ class Task000525LocomanipulationSDGEnvCfg(Task000525EnvCfg):
             "Cyclo-Real-Showroom-Task000525-Locomanipulation-SDG-FFW-SG2-v0"
         )
         configure_ffw_sg2_mimic_ik_actions(
-            self.actions, posture_bias_sides=("r",)
-        )
-        # Task525 manipulates only the right arm. Keep the inactive left arm on
-        # its demonstrated joint targets instead of solving an underconstrained
-        # Cartesian hold that can drift in the IK null space.
-        self.actions.arm_l_action = make_ffw_sg2_joint_position_action_cfg(
-            FFW_SG2_LEFT_ARM_JOINT_NAMES
+            self.actions, posture_bias_sides=("l", "r")
         )
 
 
@@ -206,14 +203,50 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
             (),
             device=self.device,
         )
+        self._task525_target_region = "C"
+        self._task525_active_side = manipulation_side_for_region("C")
+        self._task525_source_demo = ""
+
+    def set_task525_episode_context(
+        self,
+        *,
+        target_region: str,
+        manipulation_side: str,
+        source_demo: str,
+    ) -> None:
+        """Select the source region and arm before resetting a generated episode."""
+
+        target_region = validate_region_key(target_region)
+        expected_side = manipulation_side_for_region(target_region)
+        if manipulation_side != expected_side:
+            raise ValueError(
+                f"Task525 region {target_region} requires {expected_side}, "
+                f"got {manipulation_side}"
+            )
+        self._task525_target_region = target_region
+        self._task525_active_side = manipulation_side
+        self._task525_source_demo = str(source_demo)
+
+    def task525_episode_metadata(self) -> dict[str, object]:
+        """Return resolved region/side provenance for the current environment."""
+
+        arrangement = getattr(self, "_task525_arrangements", {}).get(0, {})
+        region_to_object = arrangement.get("region_to_object", {})
+        return {
+            "target_object_name": TASK000525_TARGET_OBJECT,
+            "task525_arrangement_version": 1,
+            "task525_target_region": self._task525_target_region,
+            "task525_manipulation_side": self._task525_active_side,
+            "task525_region_to_object": json.dumps(region_to_object, sort_keys=True),
+            "source_demo_id": self._task525_source_demo,
+        }
 
     def reset_to(self, state, env_ids, seed=None, is_relative=False):
         """Restore a seed, then reapply Task525 generation pose randomization.
 
         Isaac Lab ``reset_to`` runs reset events first and then overwrites them
-        with the HDF5 initial state. Reapplying only the existing Task525 root
-        and B-region events here preserves the requested randomized episode
-        start without duplicating their sampling logic.
+        with the HDF5 initial state. Reapplying the Task525 root and selected
+        A-D region arrangement preserves the randomized generated start.
         """
 
         obs, extras = super().reset_to(
@@ -242,6 +275,9 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
                 self,
                 ids,
                 layout_key=coffee_positions.layout_key,
+                target_region=self._task525_target_region,
+                sample_positions=coffee_positions.sample_positions,
+                shuffle_distractors=coffee_positions.shuffle_distractors,
             )
             randomization_applied = True
 
@@ -284,8 +320,8 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
                 f"Task525 source action must be 22D joint19+base3, got {tuple(action.shape)}"
             )
 
-        # The local hybrid action uses these source joint commands for the
-        # inactive left arm and passive head/lift terms.
+        # Dual-EEF actions still use source joint commands for the passive
+        # head/lift terms.
         self._source_joint_action = action[:19].detach().clone()
 
         return LocomanipulationSDGInputData(
@@ -343,7 +379,7 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
 
         if not hasattr(self, "_source_joint_action"):
             raise RuntimeError("Task525 SDG source joint action is unavailable")
-        action[0, 0:7] = self._source_joint_action[0:7].to(self.device)
+        action[0, 0:7] = left_pose
         action[0, 7:8] = left_hand_joint_positions_target.to(self.device).reshape(1)
         action[0, 8:15] = right_pose
         action[0, 15:16] = right_hand_joint_positions_target.to(self.device).reshape(1)
@@ -353,8 +389,10 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
             raise ValueError("Task525 SDG action contains non-finite values")
         return action
 
-    def _right_tcp_pose_world(self) -> torch.Tensor:
-        sensor = self.scene["right_eef"]
+    def _active_tcp_pose_world(self) -> torch.Tensor:
+        sensor = self.scene[
+            "left_eef" if self._task525_active_side == "left" else "right_eef"
+        ]
         return torch.cat(
             (sensor.data.target_pos_w[:, 0, :], sensor.data.target_quat_w[:, 0, :]),
             dim=-1,
@@ -369,9 +407,9 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
         """Reject a failed pick before spending time on navigation."""
 
         object_pose = self.get_object().get_pose()
-        right_tcp = self._right_tcp_pose_world()
+        active_tcp = self._active_tcp_pose_world()
         eef_object_distance = float(
-            torch.linalg.vector_norm(right_tcp[0, :3] - object_pose[0, :3]).item()
+            torch.linalg.vector_norm(active_tcp[0, :3] - object_pose[0, :3]).item()
         )
         object_displacement = float(
             torch.linalg.vector_norm(object_pose[0, :3] - initial_object_pose[0, :3]).item()
@@ -390,7 +428,11 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
             "carry_home_joint_max_error_rad_or_m": home_joint_max_error,
         }
         if eef_object_distance > 0.080:
-            return False, "carry_checkpoint: target can is no longer held by the right gripper", metrics
+            return (
+                False,
+                f"carry_checkpoint: target can is no longer held by the {self._task525_active_side} gripper",
+                metrics,
+            )
         if object_displacement < 0.200:
             return False, "carry_checkpoint: target can did not clear the cabinet", metrics
         if home_joint_max_error > 0.150:
@@ -420,7 +462,7 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
         angular_speed = float(torch.linalg.vector_norm(target.data.root_ang_vel_w[0]).item())
         eef_distance = float(
             torch.linalg.vector_norm(
-                self._right_tcp_pose_world()[0, :3] - target.data.root_pos_w[0]
+                self._active_tcp_pose_world()[0, :3] - target.data.root_pos_w[0]
             ).item()
         )
         root_pose = self._robot_root.get_pose()[0]
@@ -438,14 +480,18 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
             "final_robot_world_qz": float(root_pose[6]),
             "final_can_linear_speed_mps": linear_speed,
             "final_can_angular_speed_radps": angular_speed,
-            "final_right_eef_can_distance_m": eef_distance,
+            "final_active_eef_can_distance_m": eef_distance,
         }
         if not (inside_x and inside_y and supported_z):
             return False, "final_checkpoint: target can is not fully supported inside the destination mat", metrics
         if linear_speed > 0.030 or angular_speed > 0.250:
             return False, "final_checkpoint: target can has not settled", metrics
         if eef_distance < 0.100:
-            return False, "final_checkpoint: right gripper has not released the target can", metrics
+            return (
+                False,
+                f"final_checkpoint: {self._task525_active_side} gripper has not released the target can",
+                metrics,
+            )
         return True, "", metrics
 
     def get_base(self) -> HasPose:
