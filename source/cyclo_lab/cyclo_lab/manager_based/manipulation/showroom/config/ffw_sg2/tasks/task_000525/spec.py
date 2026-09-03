@@ -33,8 +33,8 @@ TASK_000525_SPEC = ShowroomTaskSpec(
     env_name="Cyclo-Real-Showroom-Task000525-FFW-SG2-v0",
     instruction=(
         f"Pick up {TASK_000525_TARGET_OBJECT} from kolbjorn_cabinet_02, "
-        "drive to central_dining_set, and place the can on the ivory mat "
-        "on the table."
+        "drive to central_dining_set, and place the "
+        "can on the ivory mat on the table."
     ),
     target_object=TASK_000525_TARGET_OBJECT,
     target_side=TASK_000525_TARGET_SIDE,
