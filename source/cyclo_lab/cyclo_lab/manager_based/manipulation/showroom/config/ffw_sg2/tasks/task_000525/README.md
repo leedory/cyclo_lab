@@ -105,6 +105,13 @@ The place/release sequence is intentionally unchanged in this refactor.
 infer_dropoff_replay_step(), pre-place lift descent, handle_drop_off_state(),
 and the final release gate retain their existing behavior.
 
+For the current automatic A-D seeds, `grasp_step` and `lift_step` intentionally
+refer to the same G key boundary: the lid/rim grasp and pull-out are already
+stable and the return-to-HOME transition is safe. Equality is therefore a
+valid recorded boundary. Gripper-close inference is used only when that
+recorded boundary is absent or invalid; starting the frame blend at the early
+close action can shear the thin rim grasp.
+
 ## Route-planning timing
 
 Recording and trajectory generation both:
