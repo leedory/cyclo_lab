@@ -58,6 +58,59 @@ class Task000525PhysicalPickAuditTest(unittest.TestCase):
         self.assertIn("success attribute is not true", rejected["reasons"])
         self.assertTrue(any("sentinel" in reason for reason in rejected["reasons"]))
 
+    def test_demo_requires_joint_position_target_used_by_downstream_actions(self):
+        class MissingPathGroup:
+            def __init__(self, wrapped, missing):
+                self.wrapped = wrapped
+                self.missing = missing
+                self.attrs = wrapped.attrs
+
+            def __contains__(self, path):
+                return path != self.missing and path in self.wrapped
+
+            def __getitem__(self, path):
+                return self.wrapped[path]
+
+        with h5py.File(SMOKE, "r") as handle:
+            demo = MissingPathGroup(handle["data/demo_0"], "obs/joint_pos_target")
+            report = self.module.audit_demo("demo_0", demo)
+        self.assertFalse(report["accepted"])
+        self.assertTrue(
+            any("obs/joint_pos_target" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+
+
+    def test_demo_recomputes_gate_metrics_and_rejects_negative_home_error(self):
+        class AttributeOverrideGroup:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+                self.attrs = dict(wrapped.attrs.items())
+                self.attrs["quality_carry_object_displacement_m"] += 0.01
+                self.attrs["quality_carry_home_joint_max_error_rad_or_m"] = -0.01
+
+            def __contains__(self, path):
+                return path in self.wrapped
+
+            def __getitem__(self, path):
+                return self.wrapped[path]
+
+        with h5py.File(SMOKE, "r") as handle:
+            demo = AttributeOverrideGroup(handle["data/demo_0"])
+            report = self.module.audit_demo("demo_0", demo)
+        self.assertFalse(report["accepted"])
+        self.assertTrue(
+            any("outside [0.0, 0.15]" in reason for reason in report["reasons"]),
+            report["reasons"],
+        )
+        self.assertTrue(
+            any(
+                "quality_carry_object_displacement_m" in reason
+                and "first task-2 observation" in reason
+                for reason in report["reasons"]
+            ),
+            report["reasons"],
+        )
     def test_full_closed_regression_fails_closed(self):
         with h5py.File(REGRESSION_B, "r") as handle:
             report = self.module.audit_file(

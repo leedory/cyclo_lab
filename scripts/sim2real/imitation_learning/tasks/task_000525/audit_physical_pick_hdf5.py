@@ -166,8 +166,8 @@ def _check_gate_metrics(metrics: dict[str, float], reasons: list[str]) -> None:
         reasons.append(f"carry EEF/object distance {current} exceeds {limit}")
     if displacement < CARRY_OBJECT_DISPLACEMENT_MIN_M:
         reasons.append(f"carry object displacement {displacement} is below 0.2 m")
-    if home_error > CARRY_HOME_ERROR_MAX:
-        reasons.append(f"carry home error {home_error} exceeds 0.15")
+    if home_error < 0.0 or home_error > CARRY_HOME_ERROR_MAX:
+        reasons.append(f"carry home error {home_error} is outside [0.0, 0.15]")
     if not _close(root_limit, CARRY_ROOT_XY_MAX_M, atol=1.0e-9):
         reasons.append(f"carry root limit {root_limit} is not 0.005 m")
     if not _close(root_displacement, math.hypot(root_dx, root_dy)):
@@ -178,6 +178,65 @@ def _check_gate_metrics(metrics: dict[str, float], reasons: list[str]) -> None:
         reasons.append("carry root maximum is below checkpoint displacement")
     if not _close(sentinel_rows, PICK_SENTINEL_ROWS, atol=1.0e-9):
         reasons.append(f"pick sentinel metric {sentinel_rows} is not 2")
+
+
+def _check_observed_gate_metrics(
+    demo: h5py.Group,
+    metrics: dict[str, float],
+    task: np.ndarray,
+    frames: int,
+    reasons: list[str],
+) -> None:
+    """Cross-check stored carry metrics at the first task-2 pre-step observation."""
+    if any(name not in metrics for name in REQUIRED_QUALITY_METRICS):
+        return
+    root_initial_path = "initial_state/articulation/robot/root_pose"
+    target_initial_path = f"initial_state/rigid_object/{TARGET_OBJECT}/root_pose"
+    paths = (
+        root_initial_path,
+        target_initial_path,
+        "obs/robot_root_pose_world",
+        "obs/target_object_pose_world",
+    )
+    if any(path not in demo for path in paths):
+        return
+    if (
+        demo[root_initial_path].shape != (1, 7)
+        or demo[target_initial_path].shape != (1, 7)
+        or demo["obs/robot_root_pose_world"].shape != (frames, 7)
+        or demo["obs/target_object_pose_world"].shape != (frames, 7)
+    ):
+        return
+    gate_indices = np.flatnonzero(task == 2)
+    if len(gate_indices) != PICK_SENTINEL_ROWS:
+        return
+    gate_index = int(gate_indices[0])
+    initial_root_xy = np.asarray(demo[root_initial_path])[0, :2]
+    initial_target_xyz = np.asarray(demo[target_initial_path])[0, :3]
+    root_xy = np.asarray(demo["obs/robot_root_pose_world"])[:, :2]
+    target_xyz = np.asarray(demo["obs/target_object_pose_world"])[gate_index, :3]
+    root_delta = root_xy[gate_index] - initial_root_xy
+    observed = {
+        "quality_carry_object_displacement_m": float(
+            np.linalg.norm(target_xyz - initial_target_xyz)
+        ),
+        "quality_carry_root_dx_m": float(root_delta[0]),
+        "quality_carry_root_dy_m": float(root_delta[1]),
+        "quality_carry_root_xy_displacement_m": float(np.linalg.norm(root_delta)),
+        "quality_carry_root_xy_max_displacement_m": float(
+            np.max(
+                np.linalg.norm(
+                    root_xy[: gate_index + 1] - initial_root_xy,
+                    axis=1,
+                )
+            )
+        ),
+    }
+    for name, value in observed.items():
+        if not _close(metrics[name], value):
+            reasons.append(
+                f"{name}={metrics[name]} disagrees with first task-2 observation {value}"
+            )
 
 
 def _pose_record(demo: h5py.Group, region: str, reasons: list[str]) -> dict[str, float]:
@@ -280,6 +339,7 @@ def audit_demo(name: str, demo: h5py.Group) -> dict[str, Any]:
     required = (
         "actions",
         "obs/joint_pos",
+        "obs/joint_pos_target",
         "obs/base_velocity_body",
         "obs/robot_root_pose_world",
         "obs/target_object_pose_world",
@@ -289,6 +349,7 @@ def audit_demo(name: str, demo: h5py.Group) -> dict[str, Any]:
     )
     missing = [path for path in required if path not in demo]
     frames = -1
+    task = np.asarray([], dtype=np.int64)
     if missing:
         reasons.append(f"missing required episode datasets: {missing}")
     else:
@@ -296,6 +357,7 @@ def audit_demo(name: str, demo: h5py.Group) -> dict[str, Any]:
         expected_widths = {
             "actions": 22,
             "obs/joint_pos": 19,
+            "obs/joint_pos_target": 19,
             "obs/base_velocity_body": 3,
             "obs/robot_root_pose_world": 7,
             "obs/target_object_pose_world": 7,
@@ -309,7 +371,14 @@ def audit_demo(name: str, demo: h5py.Group) -> dict[str, Any]:
                 reasons.append(f"{path} shape {shape} is not ({frames}, {width})")
         if int(demo.attrs.get("num_samples", -1)) != frames:
             reasons.append("num_samples does not match actions frame count")
-        for path in ("actions", "obs/joint_pos", "obs/base_velocity_body", "obs/robot_root_pose_world", "obs/target_object_pose_world"):
+        for path in (
+            "actions",
+            "obs/joint_pos",
+            "obs/joint_pos_target",
+            "obs/base_velocity_body",
+            "obs/robot_root_pose_world",
+            "obs/target_object_pose_world",
+        ):
             if not np.isfinite(np.asarray(demo[path])).all():
                 reasons.append(f"{path} contains non-finite values")
         task = np.asarray(demo["locomanipulation_sdg_output_data/task"]).reshape(-1)
@@ -346,6 +415,8 @@ def audit_demo(name: str, demo: h5py.Group) -> dict[str, Any]:
 
     metrics = _require_scalar_metrics(demo, reasons)
     _check_gate_metrics(metrics, reasons)
+    if frames >= 0:
+        _check_observed_gate_metrics(demo, metrics, task, frames, reasons)
     poses = _pose_record(demo, region, reasons) if region else {}
     return {
         "demo": name,
