@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate canonical replay staging and write a LeRobot v3 dataset."""
+"""Validate named replay staging and write a LeRobot v3 dataset."""
 
 from __future__ import annotations
 
@@ -16,7 +16,12 @@ from typing import Any, Mapping, Sequence
 
 
 STAGING_SCHEMA = "cyclo.isaac_action_replay_staging.v1"
-ACTION_SEMANTICS = "pre_step_raw_absolute_joint_position_command"
+SUPPORTED_ACTION_SEMANTICS = frozenset(
+    {
+        "pre_step_raw_absolute_joint_position_command",
+        "pre_step_joint_position_19_plus_body_velocity_3",
+    }
+)
 SIDECAR_NAME = "isaac_action_replay_provenance.json"
 
 CAMERA_SHAPE_CONTRACTS: dict[str, dict[str, tuple[int, int]]] = {
@@ -148,7 +153,7 @@ def load_manifest(staging: Path, expected_episodes: int | None) -> dict[str, Any
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema") != STAGING_SCHEMA:
         raise ConversionError(f"unsupported staging schema: {payload.get('schema')!r}")
-    if payload.get("action_semantics") != ACTION_SEMANTICS:
+    if payload.get("action_semantics") not in SUPPORTED_ACTION_SEMANTICS:
         raise ConversionError(f"unsupported action semantics: {payload.get('action_semantics')!r}")
     episodes = payload.get("episodes")
     if not isinstance(episodes, list) or not episodes:

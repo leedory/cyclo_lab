@@ -20,7 +20,12 @@ from typing import Any, Mapping
 
 
 SCHEMA = "cyclo.isaac_action_replay_staging.v1"
-ACTION_SEMANTICS = "pre_step_raw_absolute_joint_position_command"
+SUPPORTED_ACTION_SEMANTICS = frozenset(
+    {
+        "pre_step_raw_absolute_joint_position_command",
+        "pre_step_joint_position_19_plus_body_velocity_3",
+    }
+)
 
 
 class MergeError(RuntimeError):
@@ -52,8 +57,11 @@ def load_manifest(staging: Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("schema") != SCHEMA:
         raise MergeError(f"unsupported staging schema at {path}")
-    if manifest.get("action_semantics") != ACTION_SEMANTICS:
-        raise MergeError(f"unsupported action semantics at {path}")
+    if manifest.get("action_semantics") not in SUPPORTED_ACTION_SEMANTICS:
+        raise MergeError(
+            f"unsupported action semantics at {path}: "
+            f"{manifest.get('action_semantics')!r}"
+        )
     episodes = manifest.get("episodes")
     if (
         not isinstance(episodes, list)
@@ -63,7 +71,66 @@ def load_manifest(staging: Path) -> dict[str, Any]:
         raise MergeError(f"incomplete staging manifest: {path}")
     if [int(item["episode_index"]) for item in episodes] != list(range(len(episodes))):
         raise MergeError(f"non-contiguous episode indices: {path}")
+    episode_name_contract(manifest, path)
+    camera_map = manifest.get("camera_map")
+    camera_shapes = manifest.get("camera_shapes_h_w")
+    camera_rotations = manifest.get("camera_rotation_deg")
+    if (
+        not isinstance(camera_map, dict)
+        or not camera_map
+        or len(camera_map) != len(set(camera_map.values()))
+    ):
+        raise MergeError(f"incomplete camera contract: {path}")
+    if (camera_shapes is None) != (camera_rotations is None):
+        raise MergeError(f"incomplete camera contract: {path}")
+    if camera_shapes is not None and (
+        not isinstance(camera_shapes, dict)
+        or set(camera_shapes) != set(camera_map)
+        or not isinstance(camera_rotations, dict)
+        or set(camera_rotations) != set(camera_map)
+    ):
+        raise MergeError(f"incomplete camera contract: {path}")
+    expected_videos = set(camera_map.values())
+    if any(set(item.get("videos", {})) != expected_videos for item in episodes):
+        raise MergeError(f"episode video set disagrees with camera_map: {path}")
     return manifest
+
+
+def episode_name_contract(
+    manifest: Mapping[str, Any], manifest_path: Path
+) -> tuple[list[str], list[str]]:
+    """Validate and return the invariant named-vector contract for all episodes."""
+
+    reference: tuple[list[str], list[str]] | None = None
+    for episode_offset, record in enumerate(manifest["episodes"]):
+        pair: list[list[str]] = []
+        for field in ("state_names", "action_names"):
+            names = record.get(field)
+            if (
+                not isinstance(names, list)
+                or not names
+                or not all(isinstance(name, str) and name for name in names)
+                or len(names) != len(set(names))
+            ):
+                raise MergeError(
+                    f"invalid {field} in episode {episode_offset} at {manifest_path}"
+                )
+            pair.append(names)
+        current = (pair[0], pair[1])
+        if reference is None:
+            reference = current
+        elif current[0] != reference[0]:
+            raise MergeError(
+                f"state names change across episodes at {manifest_path}: "
+                f"episode {episode_offset}"
+            )
+        elif current[1] != reference[1]:
+            raise MergeError(
+                f"action names change across episodes at {manifest_path}: "
+                f"episode {episode_offset}"
+            )
+    assert reference is not None
+    return reference
 
 
 def link_or_copy(source: Path, destination: Path) -> str:
@@ -99,13 +166,27 @@ def merge(
     if selected_count == 0:
         raise MergeError("episode selection is empty")
     reference = manifests[0]
+    reference_state_names, reference_action_names = episode_name_contract(
+        reference, sources[0] / "manifest.json"
+    )
     for path, manifest in zip(sources[1:], manifests[1:]):
-        for key in ("fps", "camera_map", "action_semantics", "task_instruction"):
+        for key in (
+            "fps",
+            "camera_map",
+            "camera_shapes_h_w",
+            "camera_rotation_deg",
+            "action_semantics",
+            "task_instruction",
+        ):
             if manifest.get(key) != reference.get(key):
                 raise MergeError(f"incompatible {key} at {path}")
-        first_names = reference["episodes"][0]["state_names"]
-        if manifest["episodes"][0]["state_names"] != first_names:
+        state_names, action_names = episode_name_contract(
+            manifest, path / "manifest.json"
+        )
+        if state_names != reference_state_names:
             raise MergeError(f"incompatible state joint names at {path}")
+        if action_names != reference_action_names:
+            raise MergeError(f"incompatible action joint names at {path}")
 
     destination.mkdir(parents=True)
     (destination / "policy_arrays").mkdir()
@@ -186,7 +267,7 @@ def merge(
         "seed": None,
         "fps": reference["fps"],
         "camera_map": reference["camera_map"],
-        "action_semantics": ACTION_SEMANTICS,
+        "action_semantics": reference["action_semantics"],
         "observation_semantics": "pre_step sources combined without temporal changes",
         "render_contract": "compatible native and replay staging episodes combined in input order",
         "episodes": records,
@@ -197,6 +278,9 @@ def merge(
         "source_manifests": source_records,
         "transfer_modes": transfer_modes,
     }
+    if reference.get("camera_shapes_h_w") is not None:
+        manifest["camera_shapes_h_w"] = reference["camera_shapes_h_w"]
+        manifest["camera_rotation_deg"] = reference["camera_rotation_deg"]
     write_json(destination / "manifest.json", manifest)
     return {
         "staging": str(destination),
