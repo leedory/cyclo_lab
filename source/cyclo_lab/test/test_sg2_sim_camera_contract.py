@@ -34,21 +34,18 @@ class TestSG2SimulationCameraContract(unittest.TestCase):
             (FFW_SG2_WRIST_CAMERA_HEIGHT, FFW_SG2_WRIST_CAMERA_WIDTH), (640, 480)
         )
 
-    def test_showroom_uses_canonical_rasters_without_relabeling_old_head_k(self):
+    def test_showroom_uses_1050_profile_at_canonical_rasters(self):
         source = ROBOT_CFG.read_text(encoding="utf-8")
         profile_head = load_sg2_camera_profile("1050").camera("head")
-        self.assertEqual((profile_head.height, profile_head.width), (480, 640))
-        self.assertEqual(profile_head.intrinsic_matrix[0], 489.7808024)
+        self.assertEqual((profile_head.height, profile_head.width), (376, 672))
+        self.assertEqual(profile_head.intrinsic_matrix[0], 365.1824645996094)
         profile_block = source.split(
             "def apply_sg2_showroom_camera_profile", 1
         )[1].split("def enable_sg2_showroom_operator_cameras", 1)[0]
         self.assertIn("width=FFW_SG2_HEAD_CAMERA_WIDTH", profile_block)
         self.assertIn("height=FFW_SG2_HEAD_CAMERA_HEIGHT", profile_block)
-        self.assertIn(
-            "== (FFW_SG2_HEAD_CAMERA_HEIGHT, FFW_SG2_HEAD_CAMERA_WIDTH)",
-            profile_block,
-        )
-        self.assertIn("else None", profile_block)
+        self.assertIn("intrinsic_matrix=head.intrinsic_matrix", profile_block)
+        self.assertNotIn("head_intrinsic_matrix", profile_block)
         self.assertIn("width=wrist_left.height", profile_block)
         self.assertIn("height=wrist_left.width", profile_block)
 

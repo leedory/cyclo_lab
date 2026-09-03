@@ -1,15 +1,15 @@
 schema_version: 1
-profile_id: sg2-1050-2026-08-24
+profile_id: sg2-1050-2026-09-03
 robot:
   ssh_alias: '1050'
   hostname: ffw-SNPR48A1050
 cameras:
   head:
-    topic: /head_camera/color/camera_info
+    topic: /zed/zed_node/left/camera_info
     frame_id: zed_left_camera_optical_frame
-    serial: null
-    width: 640
-    height: 480
+    serial: '11295797'
+    width: 672
+    height: 376
     distortion_model: plumb_bob
     d:
     - 0.0
@@ -18,12 +18,12 @@ cameras:
     - 0.0
     - 0.0
     k:
-    - 489.7808024
+    - 365.1824645996094
     - 0.0
-    - 320.0
+    - 328.350830078125
     - 0.0
-    - 489.7808024
-    - 240.0263
+    - 365.1824645996094
+    - 187.4373779296875
     - 0.0
     - 0.0
     - 1.0
@@ -74,10 +74,9 @@ cameras:
     - 0.0
     - 1.0
 provenance:
-  captured_at_utc: '2026-08-24T02:44:27.768044+00:00'
+  captured_at_utc: '2026-09-03T00:16:45+00:00'
   capture_schema: sg2-camera-intrinsics-v1
-  capture_sha256: fc2df256491ddcd60198d64c2a3f563bec1d8dc7ab08563c7f6b86901adebf4f
-  experiment: 2026-08-24_11-42-30_sg2_1050_camera_intrinsics
+  experiment: 2026-09-03_09-16-45_1050_vga_camera_audit
   ai_worker_image: robotis/ai-worker:2.2.1
   ai_worker_commit: a960381bf6aa7488521006792ac387e82d1c7e59
-  note: Runtime CameraInfo capture; not a checkerboard recalibration.
+  note: Runtime native ZED VGA CameraInfo capture; not a checkerboard recalibration.
