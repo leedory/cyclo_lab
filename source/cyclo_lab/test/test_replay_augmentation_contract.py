@@ -217,7 +217,7 @@ class ReplayAugmentationContractTest(unittest.TestCase):
             }
             manifest = {
                 "schema": module.STAGING_SCHEMA,
-                "action_semantics": module.ACTION_SEMANTICS,
+                "action_semantics": "pre_step_raw_absolute_joint_position_command",
                 "observation_semantics": "current_state",
                 "episode_count": 1,
                 "source_episode_count": 1,
