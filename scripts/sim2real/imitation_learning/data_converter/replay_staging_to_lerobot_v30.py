@@ -54,6 +54,35 @@ def build_reorder_indices(source_names: Sequence[str], target_names: Sequence[st
     return [lookup[name] for name in target]
 
 
+def build_projection_indices(
+    source_names: Sequence[str],
+    requested_names: Sequence[str] | None,
+    *,
+    field: str,
+) -> tuple[list[str], list[int]]:
+    """Resolve a non-empty, ordered subset of a named source vector."""
+
+    source = [str(name) for name in source_names]
+    selected = (
+        source
+        if requested_names is None
+        else [str(name) for name in requested_names]
+    )
+    if not source:
+        raise ConversionError(f"source {field} names must not be empty")
+    if len(source) != len(set(source)):
+        raise ConversionError(f"source {field} names must not contain duplicates")
+    if not selected:
+        raise ConversionError(f"requested {field} names must not be empty")
+    if len(selected) != len(set(selected)):
+        raise ConversionError(f"requested {field} names must not contain duplicates")
+    missing = [name for name in selected if name not in source]
+    if missing:
+        raise ConversionError(f"requested {field} names not found in source: {missing}")
+    lookup = {name: index for index, name in enumerate(source)}
+    return selected, [lookup[name] for name in selected]
+
+
 def verify_video(path: Path, expected_frames: int, expected_fps: int) -> dict[str, Any]:
     if not path.is_file():
         raise ConversionError(f"missing video: {path}")
@@ -137,7 +166,12 @@ def load_manifest(staging: Path, expected_episodes: int | None) -> dict[str, Any
     return payload
 
 
-def load_episode_arrays(staging: Path, record: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_episode_arrays(
+    staging: Path,
+    record: Mapping[str, Any],
+    requested_state_names: Sequence[str] | None = None,
+    requested_action_names: Sequence[str] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], list[str]]:
     import numpy as np
 
     path = staging / str(record["arrays"])
@@ -160,8 +194,23 @@ def load_episode_arrays(staging: Path, record: Mapping[str, Any]) -> tuple[np.nd
         raise ConversionError(f"non-finite policy data at {path}")
     if length > 1 and np.any(np.diff(timestamp) <= 0.0):
         raise ConversionError(f"timestamps are not strictly increasing at {path}")
-    action = action[:, build_reorder_indices(action_names, state_names)]
-    return state, action, timestamp
+    selected_state_names, state_indices = build_projection_indices(
+        state_names,
+        requested_state_names,
+        field="state",
+    )
+    selected_action_names, action_indices = build_projection_indices(
+        action_names,
+        requested_action_names,
+        field="action",
+    )
+    return (
+        state[:, state_indices],
+        action[:, action_indices],
+        timestamp,
+        selected_state_names,
+        selected_action_names,
+    )
 
 
 def write_dataset(
@@ -171,6 +220,9 @@ def write_dataset(
     robot_type: str,
     cyclo_source_root: Path,
     expected_episodes: int | None,
+    *,
+    state_names: Sequence[str] | None = None,
+    action_names: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     staging = staging.resolve()
     output = output.resolve()
@@ -199,13 +251,28 @@ def write_dataset(
     input_video_checks = []
     policy_video_checks = []
     state_names_reference = None
+    action_names_reference = None
     for record in manifest["episodes"]:
-        state, action, timestamp = load_episode_arrays(staging, record)
-        state_names = [str(name) for name in record["state_names"]]
+        (
+            state,
+            action,
+            timestamp,
+            episode_state_names,
+            episode_action_names,
+        ) = load_episode_arrays(
+            staging,
+            record,
+            requested_state_names=state_names,
+            requested_action_names=action_names,
+        )
         if state_names_reference is None:
-            state_names_reference = state_names
-        elif state_names != state_names_reference:
+            state_names_reference = episode_state_names
+        elif episode_state_names != state_names_reference:
             raise ConversionError("observation state names change across episodes")
+        if action_names_reference is None:
+            action_names_reference = episode_action_names
+        elif episode_action_names != action_names_reference:
+            raise ConversionError("action names change across episodes")
         videos = {}
         input_checks = {}
         output_checks = {}
@@ -252,8 +319,8 @@ def write_dataset(
                 length=len(timestamp),
                 source_path=staging / "manifest.json",
                 task_name=task_text,
-                observation_state_names=state_names,
-                action_names=state_names,
+                observation_state_names=episode_state_names,
+                action_names=episode_action_names,
             )
         )
 
@@ -292,6 +359,14 @@ def write_dataset(
         "render_contract": manifest["render_contract"],
         "camera_names": cameras,
         "joint_names": state_names_reference,
+        "state_names": state_names_reference,
+        "action_names": action_names_reference,
+        "source_state_names": [
+            str(name) for name in manifest["episodes"][0]["state_names"]
+        ],
+        "source_action_names": [
+            str(name) for name in manifest["episodes"][0]["action_names"]
+        ],
         "writer": (
             "cyclo_data.converter.to_lerobot_v30."
             "RosbagToLerobotV30Converter.write_from_episodes"
@@ -331,6 +406,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robot-type", default="ffw_sg2_rev1")
     parser.add_argument("--expected-episodes", type=int)
     parser.add_argument(
+        "--state-names",
+        nargs="+",
+        help="Ordered non-empty subset of source observation.state names",
+    )
+    parser.add_argument(
+        "--action-names",
+        nargs="+",
+        help="Ordered non-empty subset of source action names",
+    )
+    parser.add_argument(
         "--cyclo-source-root",
         type=Path,
         default=Path("/root/ros2_ws/src/cyclo_intelligence"),
@@ -347,6 +432,8 @@ def main() -> int:
         args.robot_type,
         args.cyclo_source_root,
         args.expected_episodes,
+        state_names=args.state_names,
+        action_names=args.action_names,
     )
     print("LEROBOT_V30=" + json.dumps(result, sort_keys=True), flush=True)
     return 0
