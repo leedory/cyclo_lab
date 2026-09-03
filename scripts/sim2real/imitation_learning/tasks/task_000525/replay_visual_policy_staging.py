@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay Task525 joint22 actions with visual-only randomization.
+"""Replay canonical Task525 joint22 actions with visual-only randomization.
 
 Every episode is reset from the source initial state and replayed from frame
 zero.  Only the selected pick or navigation phase is captured.  This is
@@ -24,6 +24,9 @@ from typing import Any, Mapping, Sequence
 from isaaclab.app import AppLauncher
 
 
+SUPPORTED_CAMERA_NAMES = ("cam_head", "cam_wrist_left", "cam_wrist_right")
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", required=True)
 parser.add_argument("--input-file", type=Path, required=True)
@@ -35,6 +38,14 @@ parser.add_argument("--num-envs", type=int, default=8)
 parser.add_argument("--seed", type=int, default=20260901)
 parser.add_argument("--limit-episodes", type=int)
 parser.add_argument("--expected-source-episodes", type=int)
+parser.add_argument(
+    "--camera-names",
+    nargs="+",
+    choices=SUPPORTED_CAMERA_NAMES,
+    default=list(SUPPORTED_CAMERA_NAMES),
+    metavar="CAMERA",
+    help="Non-empty source-camera subset to render (default: all three).",
+)
 parser.add_argument(
     "--resume",
     action="store_true",
@@ -49,14 +60,6 @@ parser.add_argument(
     help=(
         "With --resume, roll the committed manifest back to this batch boundary "
         "before regenerating the suffix."
-    ),
-)
-parser.add_argument(
-    "--source-sdg-action-replay",
-    action="store_true",
-    help=(
-        "Replay the source dual-EEF SDG22 command through the matching SDG environment, "
-        "while exporting the derived causal joint22 ACT label."
     ),
 )
 parser.add_argument(
@@ -92,6 +95,7 @@ from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.randomization 
     appearance_events,
 )
 from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.appearance_events import (
+    randomize_coffee_can_distractor_appearance,
     randomize_coffee_can_visual_yaw,
 )
 from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.tasks.task_000525.profiles import (
@@ -103,7 +107,9 @@ from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.platform.repla
 )
 
 from policy_staging_common import (
+    CANONICAL_CAMERA_MAP,
     CANONICAL_CAMERA_SHAPES,
+    CANONICAL_SOURCE_FORMAT,
     CAMERA_ROTATION_DEG,
     POLICY_ACTION_SEMANTICS,
     POLICY_CONTRACT_ID,
@@ -117,17 +123,10 @@ from policy_staging_common import (
     jsonable,
     phase_bounds,
     selected_episode_names,
+    select_camera_map,
     sha256,
     validate_source,
 )
-
-
-CAMERA_MAP = {
-    "cam_head": "cam_left_head",
-    "cam_wrist_left": "cam_left_wrist",
-    "cam_wrist_right": "cam_right_wrist",
-}
-
 
 class ReplayError(RuntimeError):
     """Raised when replay cannot preserve the Task525 policy contract."""
@@ -287,10 +286,11 @@ def load_profile(path: str) -> Task000525RandomizationCfg:
         and profile.wall.enabled
         and profile.camera.enabled
         and profile.coffee_visual_yaw.enabled
+        and profile.coffee_distractor_appearance.enabled
     ):
         raise ReplayError(
-            "Task525 visual replay requires lighting, wall, camera, and "
-            "coffee visual-yaw axes"
+            "Task525 visual replay requires lighting, wall, camera, coffee "
+            "visual-yaw, and distractor-appearance axes"
         )
     return profile
 
@@ -299,6 +299,7 @@ def apply_profile(
     env: Any,
     env_ids: torch.Tensor,
     profile: Task000525RandomizationCfg,
+    camera_names: Sequence[str],
 ) -> None:
     if hasattr(env, "_task458_dome_sample"):
         delattr(env, "_task458_dome_sample")
@@ -318,7 +319,7 @@ def apply_profile(
     appearance_events.randomize_policy_cameras(
         env,
         env_ids,
-        camera.camera_names,
+        camera_names,
         camera.coupled_focal_scale_range,
         camera.local_roll_max_rad,
         camera.local_pitch_max_rad,
@@ -331,12 +332,21 @@ def apply_profile(
         coffee_yaw.object_names,
         coffee_yaw.yaw_range_rad,
     )
+    distractor_appearance = profile.coffee_distractor_appearance
+    randomize_coffee_can_distractor_appearance(
+        env,
+        env_ids,
+        distractor_appearance.object_names,
+        distractor_appearance.appearance_names,
+        distractor_appearance.protected_object_name,
+    )
 
 
 def profile_snapshot(
     env: Any,
     env_ids: torch.Tensor,
     profile: Task000525RandomizationCfg,
+    camera_names: Sequence[str],
 ) -> list[dict]:
     result = []
     for env_id in env_ids.detach().cpu().tolist():
@@ -353,12 +363,15 @@ def profile_snapshot(
                             "coupled_focal_scale": env._task458_camera_focal_scale[name][env_id],
                             "local_rpy_rad": env._task458_camera_local_rpy[name][env_id],
                         }
-                        for name in profile.camera.camera_names
+                        for name in camera_names
                     },
                     "coffee_can_visual_yaw": {
                         name: env._task000525_coffee_visual_yaw[env_id][name]
                         for name in profile.coffee_visual_yaw.object_names
                     },
+                    "coffee_can_distractor_appearance": (
+                        env._task000525_coffee_distractor_appearance[env_id]
+                    ),
                 }
             )
         )
@@ -403,24 +416,33 @@ def verify_protected_root_poses(
     return result
 
 
-def refresh_camera_buffers(env: Any, env_ids: torch.Tensor, updates: int) -> None:
+def refresh_camera_buffers(
+    env: Any,
+    env_ids: torch.Tensor,
+    updates: int,
+    camera_names: Sequence[str],
+) -> None:
     if updates < 1:
         raise ReplayError("camera refresh updates must be positive")
     env.scene.write_data_to_sim()
     for _ in range(updates):
-        for camera_name in CAMERA_MAP:
+        for camera_name in camera_names:
             env.scene.sensors[camera_name].reset(env_ids)
         env.sim.render()
-        for camera_name in CAMERA_MAP:
+        for camera_name in camera_names:
             _ = env.scene.sensors[camera_name].data.output["rgb"]
 
 
 def open_video_writers(
-    output: Path, output_indices: Sequence[int], env: Any, fps: int
+    output: Path,
+    output_indices: Sequence[int],
+    camera_map: Mapping[str, str],
+    env: Any,
+    fps: int,
 ) -> dict[tuple[int, str], tuple[cv2.VideoWriter, Path]]:
     writers = {}
     for local_index, output_index in enumerate(output_indices):
-        for source_camera, output_camera in CAMERA_MAP.items():
+        for source_camera, output_camera in camera_map.items():
             sample = env.scene.sensors[source_camera].data.output["rgb"][local_index]
             frame = canonicalize_camera_frame(
                 source_camera, sample.detach().cpu().numpy()
@@ -449,6 +471,7 @@ def capture_frame(
     pose_references: Sequence[Mapping[str, np.ndarray]],
     source_step: int,
     active: Sequence[bool],
+    camera_map: Mapping[str, str],
     writers: Mapping[tuple[int, str], tuple[cv2.VideoWriter, Path]],
     state_rows: list[list[np.ndarray]],
     errors: list[dict[str, float]],
@@ -467,7 +490,7 @@ def capture_frame(
         .detach()
         .cpu()
         .numpy()
-        for source_camera in CAMERA_MAP
+        for source_camera in camera_map
     }
 
     for local_index, is_active in enumerate(active):
@@ -490,7 +513,7 @@ def capture_frame(
         errors[local_index]["target_angle_rad"] = max(
             errors[local_index]["target_angle_rad"], target_angle
         )
-        for source_camera in CAMERA_MAP:
+        for source_camera in camera_map:
             frame = canonicalize_camera_frame(
                 source_camera, camera_frames[source_camera][local_index]
             )
@@ -558,6 +581,10 @@ def load_resume_manifest(
         "source_hdf_sha256",
         "source_episode_count",
         "source_episodes",
+        "source_format",
+        "source_robot_contract_id",
+        "source_action_semantics",
+        "source_action_names",
         "policy_robot_contract_id",
         "policy_action_semantics",
         "policy",
@@ -658,8 +685,14 @@ def main() -> None:
         raise ReplayError("--repeats and --num-envs must be positive")
     if args.resume_from_episode is not None and not args.resume:
         raise ReplayError("--resume-from-episode requires --resume")
-    if args.source_state_replay and args.source_sdg_action_replay:
-        raise ReplayError("choose either source state replay or source SDG action replay")
+    if tuple(CANONICAL_CAMERA_MAP) != SUPPORTED_CAMERA_NAMES:
+        raise ReplayError("Task525 camera CLI and canonical camera map disagree")
+    camera_map = select_camera_map(args.camera_names)
+    camera_names = tuple(camera_map)
+    camera_shapes = {
+        name: list(CANONICAL_CAMERA_SHAPES[name]) for name in camera_names
+    }
+    camera_rotations = {name: CAMERA_ROTATION_DEG[name] for name in camera_names}
     input_path = args.input_file.resolve()
     output = args.output_dir.resolve()
     if output.exists() and not args.resume:
@@ -669,6 +702,14 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=args.resume)
     (output / "policy_arrays").mkdir(exist_ok=args.resume)
     profile = load_profile(args.randomization_profile)
+    unconfigured_cameras = [
+        name for name in camera_names if name not in profile.camera.camera_names
+    ]
+    if unconfigured_cameras:
+        raise ReplayError(
+            f"selected cameras are absent from the randomization profile: "
+            f"{unconfigured_cameras}"
+        )
     started = time.monotonic()
 
     with h5py.File(input_path, "r") as source:
@@ -687,8 +728,7 @@ def main() -> None:
             raise ReplayError("no source episodes selected")
 
         env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs)
-        if not args.source_sdg_action_replay:
-            env_cfg.init_action_cfg("record")
+        env_cfg.init_action_cfg("record")
         env_cfg.recorders = None
         env_cfg.terminations = None
         disable_configured_events(env_cfg)
@@ -697,7 +737,7 @@ def main() -> None:
         env.reset()
         if env.action_space.shape[-1] != 22:
             raise ReplayError(f"Task525 replay environment action width is {env.action_space.shape[-1]}")
-        missing_cameras = [name for name in CAMERA_MAP if name not in env.scene.sensors]
+        missing_cameras = [name for name in camera_names if name not in env.scene.sensors]
         if missing_cameras:
             raise ReplayError(f"missing policy cameras: {missing_cameras}")
 
@@ -709,7 +749,10 @@ def main() -> None:
             "source_episode_count": len(names),
             "source_episodes": names,
             "source_attrs": {str(key): jsonable(data.attrs[key]) for key in data.attrs},
+            "source_format": contract["source_format"],
             "source_robot_contract_id": contract["source_contract_id"],
+            "source_action_semantics": contract["source_action_semantics"],
+            "source_action_names": contract["source_action_names"],
             "policy_robot_contract_id": POLICY_CONTRACT_ID,
             "policy_action_semantics": POLICY_ACTION_SEMANTICS,
             "policy": args.policy,
@@ -731,22 +774,18 @@ def main() -> None:
             "repeats": args.repeats,
             "seed": args.seed,
             "fps": contract["fps"],
-            "camera_map": CAMERA_MAP,
-            "camera_shapes_h_w": CANONICAL_CAMERA_SHAPES,
-            "camera_rotation_deg": CAMERA_ROTATION_DEG,
+            "camera_map": camera_map,
+            "camera_shapes_h_w": camera_shapes,
+            "camera_rotation_deg": camera_rotations,
             "camera_refresh_updates": args.camera_refresh_updates,
             "action_semantics": STAGING_ACTION_SEMANTICS,
             "observation_semantics": "replay pre_step phase crop",
             "render_contract": (
                 "source initial state + "
                 + (
-                    "exact recorded pre-step scene states + derived causal joint22 ACT labels"
+                    "exact recorded pre-step scene states + canonical joint22 ACT labels"
                     if args.source_state_replay
-                    else (
-                        "source dual-EEF SDG22 replay actions + derived causal joint22 ACT labels"
-                        if args.source_sdg_action_replay
-                        else "derived causal joint22 replay actions and ACT labels"
-                    )
+                    else "canonical joint22 replay actions and ACT labels"
                 )
                 + " + visual-only profile; "
                 + (
@@ -759,9 +798,9 @@ def main() -> None:
                 "recorded_scene_state"
                 if args.source_state_replay
                 else (
-                    "source_sdg_dual_eef22"
-                    if args.source_sdg_action_replay
-                    else "derived_policy_joint22"
+                    "source_policy_joint22"
+                    if contract["source_format"] == CANONICAL_SOURCE_FORMAT
+                    else "derived_generator_policy_joint22"
                 )
             ),
             "trajectory_error_limits": {
@@ -818,7 +857,7 @@ def main() -> None:
                         all_env_ids,
                         profile.coffee_visual_yaw.object_names,
                     )
-                    apply_profile(env, all_env_ids, profile)
+                    apply_profile(env, all_env_ids, profile, camera_names)
                     protected_after = protected_root_pose_snapshot(
                         env,
                         all_env_ids,
@@ -828,8 +867,15 @@ def main() -> None:
                         protected_before, protected_after
                     )
                     env.sim.forward()
-                    refresh_camera_buffers(env, all_env_ids, args.camera_refresh_updates)
-                    snapshots = profile_snapshot(env, all_env_ids, profile)
+                    refresh_camera_buffers(
+                        env,
+                        all_env_ids,
+                        args.camera_refresh_updates,
+                        camera_names,
+                    )
+                    snapshots = profile_snapshot(
+                        env, all_env_ids, profile, camera_names
+                    )
 
                     policy_rows = []
                     replay_rows = []
@@ -837,11 +883,7 @@ def main() -> None:
                     for name in padded_names:
                         _state, action, tasks = derive_policy_arrays(data[name])
                         policy_rows.append(action)
-                        replay_rows.append(
-                            np.asarray(data[name]["actions"], dtype=np.float32)
-                            if args.source_sdg_action_replay
-                            else action
-                        )
+                        replay_rows.append(action)
                         bounds.append(phase_bounds(tasks, args.policy))
                     maximum_step = max(end for _start, end in bounds[:local_count])
                     minimum_step = (
@@ -857,7 +899,13 @@ def main() -> None:
                         if args.source_state_replay
                         else None
                     )
-                    writers = open_video_writers(output, output_indices, env, contract["fps"])
+                    writers = open_video_writers(
+                        output,
+                        output_indices,
+                        camera_map,
+                        env,
+                        contract["fps"],
+                    )
                     state_rows: list[list[np.ndarray]] = [[] for _ in range(local_count)]
                     errors = [
                         {
@@ -880,7 +928,9 @@ def main() -> None:
                                     is_relative=True,
                                 )
                                 env.sim.forward()
-                                refresh_camera_buffers(env, all_env_ids, 1)
+                                refresh_camera_buffers(
+                                    env, all_env_ids, 1, camera_names
+                                )
                             active = [
                                 bounds[index][0] <= step_index < bounds[index][1]
                                 for index in range(local_count)
@@ -891,6 +941,7 @@ def main() -> None:
                                     pose_references,
                                     step_index,
                                     active,
+                                    camera_map,
                                     writers,
                                     state_rows,
                                     errors,
@@ -903,7 +954,9 @@ def main() -> None:
                                     ]
                                 )
                                 env.step(torch.as_tensor(action_batch, device=env.device))
-                                refresh_camera_buffers(env, all_env_ids, 1)
+                                refresh_camera_buffers(
+                                    env, all_env_ids, 1, camera_names
+                                )
                     finally:
                         for writer, _path in writers.values():
                             writer.release()
@@ -930,7 +983,7 @@ def main() -> None:
                             output_camera: str(
                                 writers[(local_index, source_camera)][1].relative_to(output)
                             )
-                            for source_camera, output_camera in CAMERA_MAP.items()
+                            for source_camera, output_camera in camera_map.items()
                         }
                         manifest["episodes"].append(
                             {

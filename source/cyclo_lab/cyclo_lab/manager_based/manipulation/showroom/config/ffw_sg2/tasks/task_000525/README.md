@@ -44,7 +44,7 @@ and its KR counterpart.
 | generation environment and success metrics | locomanipulation_sdg_env.py |
 | generation CLI/state machine/planner | scripts/.../task_000525/generate_trajectories.py |
 | seed-recording route controller | online_dijkstra.py |
-| visual-only can-label yaw | appearance_events.py |
+| visual-only can-label yaw and distractor appearance | appearance_events.py |
 | mat pose, collider, and fixed joint | destination_mat.py |
 | Task525-only arm hold tuning | robot_stability.py |
 
@@ -54,14 +54,14 @@ generator directly; it does not expose an Isaac Lab Mimic compatibility shim.
 ## Randomization profiles
 
 All Task525 axes are selected in profiles.py. Environment classes do not carry
-separate coffee-position or coffee-yaw booleans.
+separate coffee-position, coffee-yaw, or distractor-appearance booleans.
 
 | Profile | Physical axes | Appearance axes |
 | --- | --- | --- |
 | TASK000525_DETERMINISTIC | none | none |
 | TASK000525_RECORD_RANDOMIZED | orange in C, distractor permutation, sampled centers | can visual yaw |
 | TASK000525_PHYSICAL_TRAJECTORY_GENERATION | root X/Y +/-30 mm, yaw +/-2.5 degrees, sampled A-D can regions | none |
-| TASK000525_VISUAL_REPLAY_AUGMENTATION | none | lighting, wall, cameras, can visual yaw |
+| TASK000525_VISUAL_REPLAY_AUGMENTATION | none | lighting, wall, cameras, can visual yaw, non-target label permutation |
 
 
 Seed profiles A-D use fixed rectangle centers. Physical generation preserves
@@ -123,9 +123,19 @@ evaluate_task525_final_checkpoint() in locomanipulation_sdg_env.py.
 
 Carry checkpoint:
 
-- active TCP-to-can distance <= 0.080 m;
+- active TCP-to-can distance <= max(0.080 m, source distance + 0.025 m);
 - can displacement from randomized initial pose >= 0.200 m;
 - non-gripper joint19 maximum carry/home error <= 0.150 rad or m.
+
+The source distance is measured from the active-side EEF observation to the
+target-object observation at the episode's navigate_step. The new A-D rim-grasp
+seeds measure about 0.078-0.0875 m, so their realized limits are
+0.103-0.1125 m. This admits the observed 0.091/0.093 m near-source attempts
+without weakening the displacement/posture gates; a 0.200 m or larger gross
+separation still fails for every accepted A-D source.
+
+The HDF5 quality metrics include the measured carry distance, source distance,
+0.025 m tolerance, and realized per-episode limit.
 
 Final checkpoint:
 
@@ -154,6 +164,25 @@ islands.
 A 2026-09-01 one-episode visual-replay smoke test produced 209 frames at 15 Hz,
 recorded independent radian/degree yaw samples for all four cans, and reported
 exactly zero protected-root error for the robot and every can.
+
+## Non-target coffee-can label permutation
+
+Visual replay independently permutes the black, brown, and green appearance
+variants across the three distractor object roots. The orange target is not in
+the sampling set, and both profile validation and the runtime event reject a
+configuration that includes it.
+
+The `coffee_can.usd` appearance variants define the available label materials,
+but replay does not switch variants after PhysX starts. USD variant selection
+recomposes the referenced rigid-body subtree and can invalidate an active
+PhysX tensor view. Instead, the event changes only the existing
+`material:binding` relationship target on `Visual/SharedMesh`, verifies the
+realized binding at `<distractor-root>/Looks/<sampled-appearance>`, and verifies
+that the protected orange variant is unchanged. It never replaces a prim or
+writes a rigid root, velocity, mass, collision prim, or semantic tag. Each
+environment stores the protected target, the object-to-sampled-appearance
+permutation, authored appearance, and resolved material path in
+`_task000525_coffee_distractor_appearance` for the replay manifest.
 
 ## Robot stability
 
@@ -215,17 +244,36 @@ Bundle and validate one accepted seed per A-D region:
   --output datasets/task_000525_orange_seed_abcd.hdf5
 ~~~
 
-Generate repeat-free 15 Hz trajectories:
+Generate the primary repeat-free 15 Hz pick/carry-home trajectories. The
+`pick` acceptance scope requires the carry checkpoint, then records exactly
+two raw task-2 rows and stops. Causal conversion trims the final raw row, so
+the policy phase crop retains one navigation sentinel after tasks 0 and 1.
+Navigation and placement are deliberately outside this acceptance gate.
 
 ~~~bash
 ./scripts/sim2real/imitation_learning/run_task000525_trajectory_generation.sh \
   --dataset /workspace/cyclo_lab/datasets/task_000525_orange_seed_abcd.hdf5 \
-  --output_file /workspace/cyclo_lab/datasets/task_000525_orange_trajectory_15hz.hdf5 \
-  --num_runs 3 --max_attempts 10 --device cpu --headless --enable_cameras
+  --output_file /workspace/cyclo_lab/datasets/task_000525_orange_pick_trajectory_abcd_50_each_15hz.hdf5 \
+  --acceptance_scope pick --num_runs 200 --max_attempts 1000 \
+  --seed 20260903 --device cpu --headless --enable_cameras
 ~~~
+
+Generate optional whole-task trajectories only when navigation, placement,
+and return-home data are needed. `all` is the default and preserves the full
+carry, navigation, and final-placement acceptance behavior:
+
+~~~bash
+./scripts/sim2real/imitation_learning/run_task000525_trajectory_generation.sh \
+  --dataset /workspace/cyclo_lab/datasets/task_000525_orange_seed_abcd.hdf5 \
+  --output_file /workspace/cyclo_lab/datasets/task_000525_orange_whole_trajectory_abcd_50_each_15hz.hdf5 \
+  --acceptance_scope all --num_runs 200 --max_attempts 1000 \
+  --seed 20260903 --device cpu --headless --enable_cameras
+~~~
+
+Each exported episode records `task525_acceptance_scope` and a matching
+`task525_pick_quality_gate_v3` or `task525_all_quality_gate_v3` criterion ID.
 
 ## Deliberately deferred
 
-- visual-only distractor texture permutation beyond the physical entity shuffle;
 - carrying-object swept-volume validation for the complete route;
 - watertight/component-aware soft-finger collision proxies.

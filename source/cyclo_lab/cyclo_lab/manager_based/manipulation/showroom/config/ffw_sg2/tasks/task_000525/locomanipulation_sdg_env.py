@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+
 import numpy as np
 import torch
 
@@ -57,6 +59,24 @@ from .locomanipulation_sdg_contract import (
     SOURCE_FIXTURE_POSE_WXYZ,
     STATIC_MAP_PREFILL_BUFFER_M,
 )
+
+TASK000525_CARRY_EEF_OBJECT_DISTANCE_MIN_M = 0.080
+TASK000525_CARRY_EEF_OBJECT_DISTANCE_TOLERANCE_M = 0.025
+
+
+def task000525_carry_eef_object_distance_limit_m(
+    source_distance_m: float,
+) -> float:
+    """Allow the source rim-grasp offset plus a small replay tolerance."""
+
+    if not math.isfinite(source_distance_m) or source_distance_m < 0.0:
+        raise ValueError(
+            "Task525 source carry EEF-to-object distance must be finite and non-negative."
+        )
+    return max(
+        TASK000525_CARRY_EEF_OBJECT_DISTANCE_MIN_M,
+        source_distance_m + TASK000525_CARRY_EEF_OBJECT_DISTANCE_TOLERANCE_M,
+    )
 
 
 class _ArticulationRootPose(HasPose):
@@ -411,6 +431,25 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
         eef_object_distance = float(
             torch.linalg.vector_norm(active_tcp[0, :3] - object_pose[0, :3]).item()
         )
+        source_active_eef_key = (
+            "obs/left_eef_pose_world"
+            if self._task525_active_side == "left"
+            else "obs/right_eef_pose_world"
+        )
+        source_active_eef = self._episode_value(
+            input_episode_data, source_active_eef_key, navigate_step
+        )
+        source_object_pose = self._episode_value(
+            input_episode_data, "obs/target_object_pose_world", navigate_step
+        )
+        source_eef_object_distance = float(
+            torch.linalg.vector_norm(
+                source_active_eef[:3] - source_object_pose[:3]
+            ).item()
+        )
+        eef_object_distance_limit = task000525_carry_eef_object_distance_limit_m(
+            source_eef_object_distance
+        )
         object_displacement = float(
             torch.linalg.vector_norm(object_pose[0, :3] - initial_object_pose[0, :3]).item()
         )
@@ -424,10 +463,13 @@ class Task000525LocomanipulationSDGEnv(LocomanipulationSDGEnv):
         )
         metrics = {
             "carry_eef_object_distance_m": eef_object_distance,
+            "carry_source_eef_object_distance_m": source_eef_object_distance,
+            "carry_eef_object_distance_tolerance_m": TASK000525_CARRY_EEF_OBJECT_DISTANCE_TOLERANCE_M,
+            "carry_eef_object_distance_limit_m": eef_object_distance_limit,
             "carry_object_displacement_m": object_displacement,
             "carry_home_joint_max_error_rad_or_m": home_joint_max_error,
         }
-        if eef_object_distance > 0.080:
+        if eef_object_distance > eef_object_distance_limit:
             return (
                 False,
                 f"carry_checkpoint: target can is no longer held by the {self._task525_active_side} gripper",

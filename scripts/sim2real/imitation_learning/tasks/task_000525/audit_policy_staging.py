@@ -13,7 +13,12 @@ from typing import Any
 
 import numpy as np
 
-from policy_staging_common import POLICY_TARGET_OBJECT_NAME
+from policy_staging_common import (
+    CAMERA_ROTATION_DEG,
+    CANONICAL_CAMERA_MAP,
+    CANONICAL_CAMERA_SHAPES,
+    POLICY_TARGET_OBJECT_NAME,
+)
 
 
 class AuditError(RuntimeError):
@@ -27,12 +32,73 @@ TASK000525_CAN_NAMES = (
     "coffee_can_orange",
 )
 PROTECTED_ROOT_NAMES = ("robot", *TASK000525_CAN_NAMES)
+DISTRACTOR_OBJECT_APPEARANCES = {
+    "coffee_can_black": "black",
+    "coffee_can_brown": "brown",
+    "coffee_can_green": "green",
+}
+
+
+def validate_distractor_appearance(randomization: dict[str, Any]) -> None:
+    """Require a realized black/brown/green permutation while protecting orange."""
+
+    evidence = randomization.get("coffee_can_distractor_appearance")
+    if not isinstance(evidence, dict):
+        raise AuditError("missing coffee-can distractor appearance evidence")
+    expected_target = {
+        "object_name": POLICY_TARGET_OBJECT_NAME,
+        "appearance": "orange",
+    }
+    if evidence.get("protected_target") != expected_target:
+        raise AuditError(
+            "distractor appearance evidence does not protect canonical orange target"
+        )
+    mapping = evidence.get("distractor_mapping")
+    if not isinstance(mapping, dict) or set(mapping) != set(
+        DISTRACTOR_OBJECT_APPEARANCES
+    ):
+        raise AuditError(
+            "distractor appearance mapping must cover exactly black, brown, and green cans"
+        )
+
+    sampled_appearances = []
+    for object_name, authored_appearance in DISTRACTOR_OBJECT_APPEARANCES.items():
+        sample = mapping[object_name]
+        if not isinstance(sample, dict):
+            raise AuditError(f"{object_name}: appearance evidence is not a mapping")
+        if sample.get("authored_appearance") != authored_appearance:
+            raise AuditError(
+                f"{object_name}: authored appearance evidence is inconsistent"
+            )
+        sampled_appearance = sample.get("sampled_appearance")
+        if sampled_appearance not in DISTRACTOR_OBJECT_APPEARANCES.values():
+            raise AuditError(
+                f"{object_name}: sampled appearance is not black/brown/green"
+            )
+        material_path = sample.get("bound_material_path")
+        expected_suffix = f"/{object_name}/Looks/{sampled_appearance}"
+        if (
+            not isinstance(material_path, str)
+            or not material_path.startswith("/")
+            or not material_path.endswith(expected_suffix)
+        ):
+            raise AuditError(
+                f"{object_name}: bound material path disagrees with sampled appearance"
+            )
+        sampled_appearances.append(sampled_appearance)
+    if set(sampled_appearances) != set(DISTRACTOR_OBJECT_APPEARANCES.values()):
+        raise AuditError(
+            "sampled distractor appearances are not an exact black/brown/green permutation"
+        )
 
 
 def validate_visual_randomization(record: dict[str, Any]) -> None:
     """Validate sampled label yaw and appearance-only root invariance."""
 
     randomization = record.get("randomization", {})
+    if not isinstance(randomization, dict):
+        raise AuditError("randomization evidence is not a mapping")
+    validate_distractor_appearance(randomization)
     samples = randomization.get("coffee_can_visual_yaw", {})
     if set(samples) != set(TASK000525_CAN_NAMES):
         raise AuditError(
@@ -88,6 +154,82 @@ def load_manifest(root: Path, expected_count: int) -> dict[str, Any]:
     return manifest
 
 
+def validate_camera_contract(
+    root: Path, manifest: dict[str, Any], label: str
+) -> dict[str, str]:
+    """Validate one non-empty canonical camera subset and every episode file."""
+
+    camera_map = manifest.get("camera_map")
+    if not isinstance(camera_map, dict) or not camera_map:
+        raise AuditError(f"{label}: camera_map must be a non-empty mapping")
+    unsupported = [name for name in camera_map if name not in CANONICAL_CAMERA_MAP]
+    expected_camera_map = (
+        {}
+        if unsupported
+        else {name: CANONICAL_CAMERA_MAP[name] for name in camera_map}
+    )
+    if unsupported or camera_map != expected_camera_map:
+        raise AuditError(
+            f"{label}: camera_map is not an exact canonical subset: {camera_map}"
+        )
+    if len(camera_map) != len(set(camera_map.values())):
+        raise AuditError(f"{label}: camera_map output names are not unique")
+
+    expected_shapes = {
+        name: list(CANONICAL_CAMERA_SHAPES[name]) for name in camera_map
+    }
+    expected_rotations = {name: CAMERA_ROTATION_DEG[name] for name in camera_map}
+    if manifest.get("camera_shapes_h_w") != expected_shapes:
+        raise AuditError(f"{label}: camera_shapes_h_w is not canonical")
+    if manifest.get("camera_rotation_deg") != expected_rotations:
+        raise AuditError(f"{label}: camera_rotation_deg is not canonical")
+
+    output_cameras = tuple(camera_map.values())
+    for record in manifest["episodes"]:
+        episode_index = int(record["episode_index"])
+        expected_videos = {
+            camera: (
+                f"videos/episode_{episode_index:06d}/" f"{camera}.mp4"
+            )
+            for camera in output_cameras
+        }
+        if record.get("videos") != expected_videos:
+            raise AuditError(
+                f"{label} episode {episode_index}: video map does not exactly "
+                "match camera_map"
+            )
+        episode_directory = root / "videos" / f"episode_{episode_index:06d}"
+        if not episode_directory.is_dir():
+            raise AuditError(
+                f"{label} episode {episode_index}: missing video directory"
+            )
+        actual_files = {
+            path.name for path in episode_directory.iterdir() if path.is_file()
+        }
+        expected_files = {f"{camera}.mp4" for camera in output_cameras}
+        if actual_files != expected_files:
+            raise AuditError(
+                f"{label} episode {episode_index}: video files "
+                f"{sorted(actual_files)} != {sorted(expected_files)}"
+            )
+    return dict(camera_map)
+
+
+def validate_matching_camera_contracts(
+    native_root: Path,
+    native: dict[str, Any],
+    augmented_root: Path,
+    augmented: dict[str, Any],
+) -> dict[str, str]:
+    native_cameras = validate_camera_contract(native_root, native, "native")
+    augmented_cameras = validate_camera_contract(
+        augmented_root, augmented, "augmented"
+    )
+    if native_cameras != augmented_cameras:
+        raise AuditError("native/augmented camera subsets do not match exactly")
+    return native_cameras
+
+
 def load_arrays(
     root: Path, record: dict[str, Any], fps: float
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -123,6 +265,9 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     native = load_manifest(native_root, args.expected_sources)
     augmented = load_manifest(
         augmented_root, args.expected_sources * args.augmented_repeats
+    )
+    native_cameras = validate_matching_camera_contracts(
+        native_root, native, augmented_root, augmented
     )
     if native.get("policy") != args.policy or augmented.get("policy") != args.policy:
         raise AuditError("manifest policy does not match --policy")
@@ -234,7 +379,9 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         "max_state_abs_error": max_state_error,
         "max_trajectory_replay_error": max_pose_error,
         "action_match": "exact",
+        "camera_map": native_cameras,
         "coffee_visual_yaw_samples": "valid",
+        "coffee_distractor_appearance": "valid_non_target_permutation",
         "protected_rigid_roots": "bit-identical",
     }
 

@@ -73,6 +73,16 @@ parser.add_argument(
     help="Maximum attempts for success-only generation; 0 uses four times num_runs.",
 )
 parser.add_argument(
+    "--acceptance_scope",
+    choices=("pick", "all"),
+    default="all",
+    help=(
+        "Quality-gate scope. 'pick' accepts after the carry checkpoint and "
+        "records two navigation sentinel rows; 'all' also requires navigation "
+        "and final placement."
+    ),
+)
+parser.add_argument(
     "--draw_visualization", type=bool, default=False, help="Draw the occupancy map and path planning visualization."
 )
 parser.add_argument(
@@ -238,6 +248,9 @@ class LocomanipulationSDGDataGenerationState(enum.IntEnum):
 
 TASK000525_MAX_PRE_NAV_ROOT_XY_DISPLACEMENT_M = 0.005
 """Maximum stationary-base root motion allowed before navigation starts."""
+
+TASK000525_PICK_NAVIGATE_SENTINEL_ROWS = 2
+"""Raw task-2 rows needed to retain one sentinel after causal SDG trimming."""
 
 
 @configclass
@@ -793,6 +806,47 @@ def handle_navigate_state(
     )
 
 
+def populate_pick_navigate_sentinel(
+    env: LocomanipulationSDGEnv,
+    input_episode_data: EpisodeData,
+    recording_step: int,
+    output_data: LocomanipulationSDGOutputData,
+) -> None:
+    """Populate a zero-base task-2 row without running navigation control.
+
+    The causal joint22 conversion drops the final raw row, so pick-only output
+    records two identical-contract NAVIGATE rows and retains one task-2
+    sentinel after conversion. Navigation and destination quality are outside
+    the pick acceptance scope; these rows therefore hold the demonstrated
+    upper-body target relative to the current robot root and command no base
+    motion.
+    """
+
+    recording_item = env.load_input_data(input_episode_data, recording_step)
+    current_base_pose = env.get_base().get_pose()
+    output_data.data_generation_state = int(
+        LocomanipulationSDGDataGenerationState.NAVIGATE
+    )
+    output_data.recording_step = recording_step
+    output_data.base_velocity_target = current_base_pose.new_zeros(3)
+    output_data.left_hand_pose_target = transform_relative_pose(
+        recording_item.left_hand_pose_target,
+        recording_item.base_pose,
+        current_base_pose,
+    )[0]
+    output_data.right_hand_pose_target = transform_relative_pose(
+        recording_item.right_hand_pose_target,
+        recording_item.base_pose,
+        current_base_pose,
+    )[0]
+    output_data.left_hand_joint_positions_target = (
+        recording_item.left_hand_joint_positions_target
+    )
+    output_data.right_hand_joint_positions_target = (
+        recording_item.right_hand_joint_positions_target
+    )
+
+
 def handle_approach_state(
     env: LocomanipulationSDGEnv,
     input_episode_data: EpisodeData,
@@ -970,6 +1024,7 @@ def replay(
     navigate_step: int,
     active_side: str,
     place_step: int | None = None,
+    acceptance_scope: str = "all",
     draw_visualization: bool = False,
     angular_gain: float = 2.0,
     linear_gain: float = 1.0,
@@ -1000,6 +1055,7 @@ def replay(
         lift_step: Recording step where lifting phase begins
         navigate_step: Recording step where navigation phase begins
         active_side: Manipulation arm selected by the seed region contract
+        acceptance_scope: Stop after carry plus two task-2 rows, or run the full task
         draw_visualization: Whether to visualize occupancy map and path
         angular_gain: Proportional gain for angular velocity control
         linear_gain: Proportional gain for linear velocity control
@@ -1017,6 +1073,10 @@ def replay(
 
     if active_side not in ("left", "right"):
         raise ValueError(f"Task525 active_side must be left or right, got {active_side!r}")
+    if acceptance_scope not in ("pick", "all"):
+        raise ValueError(
+            f"Task525 acceptance_scope must be pick or all, got {acceptance_scope!r}"
+        )
 
     # Initialize environment to starting state
     env.reset_to(
@@ -1048,29 +1108,44 @@ def replay(
         approach_distance=approach_distance,
     )
 
-    # Build the scene once, then preflight a path from the reset root.  This
-    # rejects invalid randomized starts before manipulation work is performed.
+    # The full-task scope owns destination/obstacle randomization and route
+    # quality. Pick-only output still fills the recording schema with the
+    # authored destination poses, but it must not reject an otherwise-valid
+    # grasp/carry episode because of an out-of-scope destination or route.
     occupancy_map, base_goal, base_goal_approach = build_navigation_scene(
-        env, input_episode_data, approach_distance, randomize_placement
+        env,
+        input_episode_data,
+        approach_distance,
+        randomize_placement=(randomize_placement and acceptance_scope == "all"),
     )
-    preflight_started = time.perf_counter()
-    try:
-        base_path_helper = plan_navigation_path(
-            env, occupancy_map, base_goal_approach
+    planning_metrics: dict[str, float] = {}
+    if acceptance_scope == "all":
+        # Preflight from the reset root so invalid randomized full-task routes
+        # fail before manipulation work is performed.
+        preflight_started = time.perf_counter()
+        try:
+            base_path_helper = plan_navigation_path(
+                env, occupancy_map, base_goal_approach
+            )
+        except Exception as error:
+            return (
+                False,
+                f"navigation_preflight: {type(error).__name__}: {error}",
+                {},
+            )
+        planning_metrics = navigation_path_metrics(
+            "preflight", base_path_helper, time.perf_counter() - preflight_started
         )
-    except Exception as error:
-        return (
-            False,
-            f"navigation_preflight: {type(error).__name__}: {error}",
-            {},
-        )
-    planning_metrics = navigation_path_metrics(
-        "preflight", base_path_helper, time.perf_counter() - preflight_started
-    )
-    recorded_base_path = path_points_for_recording(base_path_helper)
+        recorded_base_path = path_points_for_recording(base_path_helper)
+    else:
+        base_path_helper = None
+        current_base_xy = env.get_base().get_pose_2d()[0, :2]
+        recorded_base_path = current_base_xy[None, :].expand(
+            TASK000525_RECORDED_PATH_POINTS, -1
+        ).clone()
 
-    # Visualize occupancy map and path if requested
-    if draw_visualization:
+    # Visualize the actual planned route only for full-task generation.
+    if draw_visualization and acceptance_scope == "all":
         occupancy_map_add_to_stage(
             occupancy_map,
             stage=omni.usd.get_context().get_stage(),
@@ -1095,6 +1170,8 @@ def replay(
             f"{dropoff_replay_step} before place marker {place_step}."
         )
     carry_gate_checked = False
+    carry_metrics: dict[str, float] = {}
+    pick_navigate_rows_recorded = 0
     initial_object_pose = target_object_reference.detach().clone()
     initial_robot_root_pose = env.get_base().get_pose().detach().clone()
     max_pre_navigation_root_xy_displacement = 0.0
@@ -1152,30 +1229,31 @@ def replay(
                     {**planning_metrics, **carry_metrics},
                 )
 
-            # Replan from the measured root after the allowed sub-5 mm physics
-            # settling, immediately before navigation.
-            navigation_plan_started = time.perf_counter()
-            try:
-                base_path_helper = plan_navigation_path(
-                    env, occupancy_map, base_goal_approach
+            if acceptance_scope == "all":
+                # Replan from the measured root after the allowed sub-5 mm
+                # physics settling, immediately before full navigation.
+                navigation_plan_started = time.perf_counter()
+                try:
+                    base_path_helper = plan_navigation_path(
+                        env, occupancy_map, base_goal_approach
+                    )
+                except Exception as error:
+                    return (
+                        False,
+                        f"navigation_replan: {type(error).__name__}: {error}",
+                        {**planning_metrics, **carry_metrics},
+                    )
+                planning_metrics.update(
+                    navigation_path_metrics(
+                        "navigation_entry",
+                        base_path_helper,
+                        time.perf_counter() - navigation_plan_started,
+                    )
                 )
-            except Exception as error:
-                return (
-                    False,
-                    f"navigation_replan: {type(error).__name__}: {error}",
-                    {**planning_metrics, **carry_metrics},
+                recorded_base_path = path_points_for_recording(base_path_helper)
+                config.initial_yaw_alignment_pending = (
+                    config.initial_yaw_counterclockwise
                 )
-            planning_metrics.update(
-                navigation_path_metrics(
-                    "navigation_entry",
-                    base_path_helper,
-                    time.perf_counter() - navigation_plan_started,
-                )
-            )
-            recorded_base_path = path_points_for_recording(base_path_helper)
-            config.initial_yaw_alignment_pending = (
-                config.initial_yaw_counterclockwise
-            )
 
         # Execute state-specific logic using helper functions
         if current_state == LocomanipulationSDGDataGenerationState.GRASP_OBJECT:
@@ -1204,9 +1282,24 @@ def replay(
             )
 
         elif current_state == LocomanipulationSDGDataGenerationState.NAVIGATE:
-            current_state = handle_navigate_state(
-                env, input_episode_data, recording_step, base_path_helper, base_goal_approach, config, output_data
-            )
+            if acceptance_scope == "pick":
+                populate_pick_navigate_sentinel(
+                    env,
+                    input_episode_data,
+                    recording_step,
+                    output_data,
+                )
+                current_state = LocomanipulationSDGDataGenerationState.NAVIGATE
+            else:
+                current_state = handle_navigate_state(
+                    env,
+                    input_episode_data,
+                    recording_step,
+                    base_path_helper,
+                    base_goal_approach,
+                    config,
+                    output_data,
+                )
 
         elif current_state == LocomanipulationSDGDataGenerationState.APPROACH:
             current_state = handle_approach_state(
@@ -1253,6 +1346,42 @@ def replay(
 
         env.step(action)
 
+        if (
+            acceptance_scope == "pick"
+            and output_data.data_generation_state
+            == int(LocomanipulationSDGDataGenerationState.NAVIGATE)
+        ):
+            if not carry_gate_checked:
+                raise RuntimeError(
+                    "Task525 pick sentinel row was recorded before the carry gate"
+                )
+            pick_navigate_rows_recorded += 1
+            if (
+                pick_navigate_rows_recorded
+                == TASK000525_PICK_NAVIGATE_SENTINEL_ROWS
+            ):
+                return (
+                    True,
+                    "",
+                    {
+                        **planning_metrics,
+                        **carry_metrics,
+                        "pick_navigate_sentinel_rows": float(
+                            pick_navigate_rows_recorded
+                        ),
+                    },
+                )
+
+    if acceptance_scope == "pick":
+        return (
+            False,
+            "pick_acceptance: simulation stopped before two navigation sentinel rows",
+            {
+                **planning_metrics,
+                **carry_metrics,
+                "pick_navigate_sentinel_rows": float(pick_navigate_rows_recorded),
+            },
+        )
     final_ok, final_reason, final_metrics = env.evaluate_task525_final_checkpoint()
     return final_ok, final_reason, {**planning_metrics, **carry_metrics, **final_metrics}
 
@@ -1355,6 +1484,7 @@ def set_generation_episode_result(
     success: bool,
     failure_reason: str,
     metrics: dict[str, float],
+    acceptance_scope: str,
 ) -> None:
     """Attach quality-gate status to the current recorder episode."""
 
@@ -1363,7 +1493,8 @@ def set_generation_episode_result(
     metadata = dict(getattr(episode, "metadata", {}) or {})
     metadata.update({
         "success": bool(success),
-        "success_criterion_id": "task525_generation_quality_gate_v2",
+        "task525_acceptance_scope": acceptance_scope,
+        "success_criterion_id": f"task525_{acceptance_scope}_quality_gate_v3",
         "failure_reason": "" if success else failure_reason,
     })
     metadata.update({f"quality_{key}": float(value) for key, value in metrics.items()})
@@ -1456,6 +1587,12 @@ if __name__ == "__main__":
                 manipulation_side=active_side,
                 source_demo=demo,
             )
+            print(
+                "[Task525] "
+                f"attempt={attempts} accepted={successful_runs} source={demo} "
+                f"region={target_region} arm={active_side} seed={episode_seed}",
+                flush=True,
+            )
 
             lift_step = args_cli.lift_step
             navigate_step = args_cli.navigate_step
@@ -1499,6 +1636,7 @@ if __name__ == "__main__":
                 navigate_step=navigate_step,
                 place_step=place_step,
                 active_side=active_side,
+                acceptance_scope=args_cli.acceptance_scope,
                 draw_visualization=args_cli.draw_visualization,
                 angular_gain=args_cli.angular_gain,
                 linear_gain=args_cli.linear_gain,
@@ -1520,6 +1658,7 @@ if __name__ == "__main__":
                 success,
                 failure_reason,
                 quality_metrics,
+                args_cli.acceptance_scope,
             )
             # Export before an environment reset can recompute and overwrite
             # the explicit Task525 quality result from termination terms.
@@ -1528,11 +1667,13 @@ if __name__ == "__main__":
                 successful_runs += 1
                 print(
                     f"[Task525 Quality] PASS {successful_runs}/{args_cli.num_runs} "
-                    f"after {attempts} attempt(s): {quality_metrics}"
+                    f"after {attempts} attempt(s) source={demo} "
+                    f"region={target_region} arm={active_side}: {quality_metrics}"
                 )
             else:
                 print(
                     f"[Task525 Quality] REJECT attempt {attempts}: "
+                    f"source={demo} region={target_region} arm={active_side}; "
                     f"{failure_reason}; metrics={quality_metrics}"
                 )
 

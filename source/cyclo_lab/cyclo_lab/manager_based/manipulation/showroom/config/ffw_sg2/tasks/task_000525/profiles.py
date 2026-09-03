@@ -18,7 +18,7 @@ from ...randomization.cfg import (
     WallAppearanceRandomizationCfg,
     validate_randomization_cfg,
 )
-from .arrangement import validate_region_key
+from .arrangement import TASK000525_TARGET_OBJECT, validate_region_key
 from .layout import TASK000525_CAN_NAMES, TASK000525_SELECTED_LAYOUT_KEY
 from .spec import TASK_000525_SPEC
 
@@ -43,13 +43,37 @@ class CoffeeVisualYawRandomizationCfg:
     yaw_range_rad: tuple[float, float] = (-math.pi, math.pi)
 
 
+TASK000525_DISTRACTOR_OBJECT_NAMES = tuple(
+    object_name
+    for object_name in TASK000525_CAN_NAMES
+    if object_name != TASK000525_TARGET_OBJECT
+)
+TASK000525_DISTRACTOR_APPEARANCE_NAMES = tuple(
+    object_name.removeprefix("coffee_can_")
+    for object_name in TASK000525_DISTRACTOR_OBJECT_NAMES
+)
+
+
+@dataclass(frozen=True)
+class CoffeeDistractorAppearanceRandomizationCfg:
+    """Visual-only permutation of the three non-target can label materials."""
+
+    enabled: bool = False
+    object_names: tuple[str, ...] = TASK000525_DISTRACTOR_OBJECT_NAMES
+    appearance_names: tuple[str, ...] = TASK000525_DISTRACTOR_APPEARANCE_NAMES
+    protected_object_name: str = TASK000525_TARGET_OBJECT
+
+
 @dataclass(frozen=True)
 class Task000525RandomizationCfg(ShowroomGenerationRandomizationCfg):
-    """Shared showroom axes plus Task525's two coffee-can axes."""
+    """Shared showroom axes plus Task525's coffee-can axes."""
 
     coffee_positions: CoffeeRegionRandomizationCfg = CoffeeRegionRandomizationCfg()
     coffee_visual_yaw: CoffeeVisualYawRandomizationCfg = (
         CoffeeVisualYawRandomizationCfg()
+    )
+    coffee_distractor_appearance: CoffeeDistractorAppearanceRandomizationCfg = (
+        CoffeeDistractorAppearanceRandomizationCfg()
     )
 
 
@@ -76,10 +100,50 @@ def validate_task000525_randomization_cfg(
     unknown = set(profile.coffee_visual_yaw.object_names) - set(TASK000525_CAN_NAMES)
     if unknown:
         raise ValueError(f"Unknown Task525 coffee visual objects: {sorted(unknown)}")
-
+    distractor_appearance = profile.coffee_distractor_appearance
+    if distractor_appearance.protected_object_name != TASK000525_TARGET_OBJECT:
+        raise ValueError(
+            "Task525 distractor appearance must protect the canonical target "
+            f"{TASK000525_TARGET_OBJECT!r}."
+        )
+    object_names = distractor_appearance.object_names
+    appearance_names = distractor_appearance.appearance_names
+    if len(object_names) != len(set(object_names)):
+        raise ValueError("Task525 distractor appearance object_names must be unique.")
+    if len(appearance_names) != len(set(appearance_names)):
+        raise ValueError(
+            "Task525 distractor appearance appearance_names must be unique."
+        )
+    if len(object_names) != len(appearance_names):
+        raise ValueError(
+            "Task525 distractor appearance needs one unique material for each object."
+        )
+    if TASK000525_TARGET_OBJECT in object_names:
+        raise ValueError(
+            "Task525 distractor appearance must never include the orange target object."
+        )
+    unknown_objects = set(object_names) - set(TASK000525_DISTRACTOR_OBJECT_NAMES)
+    if unknown_objects:
+        raise ValueError(
+            "Unknown Task525 distractor appearance objects: "
+            f"{sorted(unknown_objects)}"
+        )
+    expected_appearances = {
+        object_name.removeprefix("coffee_can_") for object_name in object_names
+    }
+    if set(appearance_names) != expected_appearances:
+        raise ValueError(
+            "Task525 distractor appearance must be a permutation of the selected "
+            "objects' authored non-target appearances."
+        )
+    if distractor_appearance.enabled and len(object_names) < 2:
+        raise ValueError(
+            "Task525 distractor appearance needs at least two objects when enabled."
+        )
 
 
 TASK000525_DETERMINISTIC = Task000525RandomizationCfg()
+
 
 def make_task000525_seed_profile(target_region: str) -> Task000525RandomizationCfg:
     """Return a fixed-center collection profile for one orange-can region."""
@@ -134,4 +198,7 @@ TASK000525_VISUAL_REPLAY_AUGMENTATION = Task000525RandomizationCfg(
         camera_names=TASK_000525_SPEC.policy_cameras,
     ),
     coffee_visual_yaw=CoffeeVisualYawRandomizationCfg(enabled=True),
+    coffee_distractor_appearance=CoffeeDistractorAppearanceRandomizationCfg(
+        enabled=True
+    ),
 )

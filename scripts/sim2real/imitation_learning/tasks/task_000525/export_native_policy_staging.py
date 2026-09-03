@@ -17,6 +17,7 @@ import h5py
 import numpy as np
 
 from policy_staging_common import (
+    CANONICAL_CAMERA_MAP,
     CANONICAL_CAMERA_SHAPES,
     CAMERA_ROTATION_DEG,
     POLICY_ACTION_SEMANTICS,
@@ -30,6 +31,7 @@ from policy_staging_common import (
     crop_policy_episode,
     jsonable,
     selected_episode_names,
+    select_camera_map,
     sha256,
     validate_source,
 )
@@ -90,14 +92,14 @@ def export(args: argparse.Namespace) -> dict:
         raise Task525PolicyDataError(f"refusing existing output: {output}")
     if not source_path.is_file():
         raise Task525PolicyDataError(f"missing source HDF5: {source_path}")
+    camera_map = select_camera_map(args.camera_names)
+    camera_shapes = {
+        name: list(CANONICAL_CAMERA_SHAPES[name]) for name in camera_map
+    }
+    camera_rotations = {name: CAMERA_ROTATION_DEG[name] for name in camera_map}
     started = time.monotonic()
     output.mkdir(parents=True)
     (output / "policy_arrays").mkdir()
-    camera_map = {
-        "cam_head": "cam_left_head",
-        "cam_wrist_left": "cam_left_wrist",
-        "cam_wrist_right": "cam_right_wrist",
-    }
 
     executor_context = (
         ProcessPoolExecutor(
@@ -125,7 +127,10 @@ def export(args: argparse.Namespace) -> dict:
             "source_episode_count": len(names),
             "source_episodes": names,
             "source_attrs": {str(key): jsonable(data.attrs[key]) for key in data.attrs},
+            "source_format": contract["source_format"],
             "source_robot_contract_id": contract["source_contract_id"],
+            "source_action_semantics": contract["source_action_semantics"],
+            "source_action_names": contract["source_action_names"],
             "policy_robot_contract_id": POLICY_CONTRACT_ID,
             "policy_action_semantics": POLICY_ACTION_SEMANTICS,
             "policy": args.policy,
@@ -148,8 +153,8 @@ def export(args: argparse.Namespace) -> dict:
             "seed": None,
             "fps": contract["fps"],
             "camera_map": camera_map,
-            "camera_shapes_h_w": CANONICAL_CAMERA_SHAPES,
-            "camera_rotation_deg": CAMERA_ROTATION_DEG,
+            "camera_shapes_h_w": camera_shapes,
+            "camera_rotation_deg": camera_rotations,
             "action_semantics": STAGING_ACTION_SEMANTICS,
             "observation_semantics": "source pre_step phase crop",
             "render_contract": "native canonical RGB; no rotation or resizing",
@@ -260,6 +265,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--policy", choices=tuple(POLICY_INSTRUCTIONS), required=True)
     parser.add_argument("--expected-episodes", type=int)
+    parser.add_argument(
+        "--camera-names",
+        nargs="+",
+        choices=tuple(CANONICAL_CAMERA_MAP),
+        default=list(CANONICAL_CAMERA_MAP),
+        metavar="CAMERA",
+        help="Non-empty source-camera subset to export (default: all three).",
+    )
     parser.add_argument(
         "--camera-workers",
         type=int,

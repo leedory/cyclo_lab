@@ -256,7 +256,22 @@ class Task000525MobileContractTest(unittest.TestCase):
         self.assertIn("TASK000525_MAX_PRE_NAV_ROOT_XY_DISPLACEMENT_M = 0.005", local)
         self.assertIn('"carry_root_xy_max_displacement_m"', local)
         self.assertIn("possible arm-cabinet contact", local)
-        self.assertIn('"task525_generation_quality_gate_v2"', local)
+        self.assertIn('choices=("pick", "all")', local)
+        self.assertIn('default="all"', local)
+        self.assertIn("TASK000525_PICK_NAVIGATE_SENTINEL_ROWS = 2", local)
+        self.assertIn('if acceptance_scope == "all":', local)
+        self.assertIn("pick_navigate_rows_recorded += 1", local)
+        self.assertIn(
+            "== TASK000525_PICK_NAVIGATE_SENTINEL_ROWS",
+            local,
+        )
+        self.assertLess(
+            local.index("env.step(action)"),
+            local.index("pick_navigate_rows_recorded += 1"),
+        )
+        self.assertIn('"task525_acceptance_scope": acceptance_scope', local)
+        self.assertIn('f"task525_{acceptance_scope}_quality_gate_v3"', local)
+        self.assertIn("acceptance_scope=args_cli.acceptance_scope", local)
         self.assertNotIn("--active_side right", launcher)
         self.assertIn("--navigation_mode fixed_yaw_holonomic", launcher)
         self.assertIn("--approach_distance 0.0", launcher)

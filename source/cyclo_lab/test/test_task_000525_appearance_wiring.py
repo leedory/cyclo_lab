@@ -21,7 +21,7 @@ class Task000525AppearanceWiringTest(unittest.TestCase):
     def test_profiles_select_visual_yaw_explicitly(self):
         source = (TASK_DIR / "profiles.py").read_text(encoding="utf-8")
         deterministic = source.split("TASK000525_DETERMINISTIC =", 1)[1].split(
-            "TASK000525_RECORD_RANDOMIZED =", 1
+            "def make_task000525_seed_profile", 1
         )[0]
         physical = source.split(
             "TASK000525_PHYSICAL_TRAJECTORY_GENERATION =", 1
@@ -34,6 +34,25 @@ class Task000525AppearanceWiringTest(unittest.TestCase):
         self.assertIn(
             "coffee_visual_yaw=CoffeeVisualYawRandomizationCfg(enabled=True)",
             visual,
+        )
+
+    def test_visual_profile_selects_only_non_target_appearance_shuffle(self):
+        source = (TASK_DIR / "profiles.py").read_text(encoding="utf-8")
+        physical = source.split(
+            "TASK000525_PHYSICAL_TRAJECTORY_GENERATION =", 1
+        )[1].split("TASK000525_VISUAL_REPLAY_AUGMENTATION =", 1)[0]
+        visual = source.split(
+            "TASK000525_VISUAL_REPLAY_AUGMENTATION =", 1
+        )[1]
+        self.assertNotIn("coffee_distractor_appearance=", physical)
+        self.assertIn(
+            "coffee_distractor_appearance=CoffeeDistractorAppearanceRandomizationCfg(",
+            visual,
+        )
+        self.assertIn("if object_name != TASK000525_TARGET_OBJECT", source)
+        self.assertIn(
+            "Task525 distractor appearance must never include the orange target object.",
+            source,
         )
 
     def test_env_builds_event_from_profile_values(self):

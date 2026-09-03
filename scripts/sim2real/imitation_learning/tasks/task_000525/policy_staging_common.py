@@ -1,9 +1,9 @@
 """Shared contracts for Task000525 phase-specific ACT datasets.
 
-The source generation file stores a dual-EEF action. ACT must never consume
-that field directly. This module derives the causal joint19+base3
-policy action and selects the requested contiguous task phase without copying
-the 51 GiB source HDF5.
+The active pipeline has two exact source formats: canonical joint22 seed data,
+and the dual-EEF output of the current physical trajectory generator.  This
+module dispatches between those formats and always exposes aligned canonical
+joint19+body-velocity3 state/action rows to downstream staging.
 """
 
 from __future__ import annotations
@@ -19,16 +19,74 @@ import numpy as np
 
 
 STAGING_SCHEMA = "cyclo.isaac_action_replay_staging.v1"
-STAGING_ACTION_SEMANTICS = "pre_step_raw_absolute_joint_position_command"
-POLICY_ACTION_SEMANTICS = (
-    "derived_pre_step_absolute_joint_position_19_plus_body_velocity_3"
-)
 POLICY_CONTRACT_ID = "ffw_sg2_rev1_mobile_22d_v1"
-TASK_PATH = "locomanipulation_sdg_output_data/task"
+POLICY_ACTION_SEMANTICS = "pre_step_joint_position_19_plus_body_velocity_3"
+STAGING_ACTION_SEMANTICS = POLICY_ACTION_SEMANTICS
+CANONICAL_SOURCE_FORMAT = "canonical_joint22"
+CANONICAL_TASK_PATH = "obs/task525_demo_phase"
+SDG_SOURCE_FORMAT = "task525_dual_eef_generator"
+SDG_CONTRACT_ID = "ffw_sg2_task525_locomanipulation_sdg_eef22_v1"
+SDG_ACTION_SEMANTICS = (
+    "pre_step_dual_eef_pose16_plus_passive_joint3_plus_body_velocity3"
+)
+SDG_TASK_PATH = "locomanipulation_sdg_output_data/task"
+CANONICAL_STATE_ACTION_NAMES = (
+    "arm_l_joint1",
+    "arm_l_joint2",
+    "arm_l_joint3",
+    "arm_l_joint4",
+    "arm_l_joint5",
+    "arm_l_joint6",
+    "arm_l_joint7",
+    "gripper_l_joint1",
+    "arm_r_joint1",
+    "arm_r_joint2",
+    "arm_r_joint3",
+    "arm_r_joint4",
+    "arm_r_joint5",
+    "arm_r_joint6",
+    "arm_r_joint7",
+    "gripper_r_joint1",
+    "head_joint1",
+    "head_joint2",
+    "lift_joint",
+    "linear_x",
+    "linear_y",
+    "angular_z",
+)
+SDG_ACTION_NAMES = (
+    "left_eef_x_robot_root",
+    "left_eef_y_robot_root",
+    "left_eef_z_robot_root",
+    "left_eef_qw_robot_root",
+    "left_eef_qx_robot_root",
+    "left_eef_qy_robot_root",
+    "left_eef_qz_robot_root",
+    "gripper_l_joint1",
+    "right_eef_x_robot_root",
+    "right_eef_y_robot_root",
+    "right_eef_z_robot_root",
+    "right_eef_qw_robot_root",
+    "right_eef_qx_robot_root",
+    "right_eef_qy_robot_root",
+    "right_eef_qz_robot_root",
+    "gripper_r_joint1",
+    "head_joint1",
+    "head_joint2",
+    "lift_joint",
+    "linear_x",
+    "linear_y",
+    "angular_z",
+)
 CANONICAL_CAMERA_SHAPES = {
     "cam_head": (376, 672),
     "cam_wrist_left": (640, 480),
     "cam_wrist_right": (640, 480),
+}
+CANONICAL_CAMERA_MAP = {
+    "cam_head": "cam_left_head",
+    "cam_wrist_left": "cam_left_wrist",
+    "cam_wrist_right": "cam_right_wrist",
 }
 CAMERA_ROTATION_DEG = {
     "cam_head": 0,
@@ -110,41 +168,99 @@ def source_fps(data: h5py.Group) -> int:
     return rounded
 
 
-def validate_source(data: h5py.Group) -> dict[str, Any]:
-    target_object = str(jsonable(data.attrs.get("target_object_name", "")))
-    if target_object != POLICY_TARGET_OBJECT_NAME:
-        raise Task525PolicyDataError(
-            f"Task525 policy source requires target {POLICY_TARGET_OBJECT_NAME}, "
-            f"got {target_object!r}"
-        )
+def source_format(data: h5py.Group) -> str:
+    """Identify one of the two exact source formats in the active pipeline."""
+
     contract_id = str(jsonable(data.attrs.get("robot_contract_id", "")))
-    if "locomanipulation_sdg_eef" not in contract_id:
-        raise Task525PolicyDataError(
-            f"source is not Task525 locomanipulation SDG EEF data: {contract_id!r}"
-        )
+    action_semantics = str(jsonable(data.attrs.get("action_semantics", "")))
+    pair = (contract_id, action_semantics)
+    if pair == (POLICY_CONTRACT_ID, POLICY_ACTION_SEMANTICS):
+        return CANONICAL_SOURCE_FORMAT
+    if pair == (SDG_CONTRACT_ID, SDG_ACTION_SEMANTICS):
+        return SDG_SOURCE_FORMAT
+    raise Task525PolicyDataError(
+        "Task525 source must match an active exact contract/semantics pair; "
+        f"got robot_contract_id={contract_id!r}, action_semantics={action_semantics!r}"
+    )
+
+
+def validate_source(data: h5py.Group) -> dict[str, Any]:
+    format_name = source_format(data)
+    target_object = str(jsonable(data.attrs.get("target_object_name", "")))
+    if format_name == CANONICAL_SOURCE_FORMAT:
+        if target_object != POLICY_TARGET_OBJECT_NAME:
+            raise Task525PolicyDataError(
+                f"Task525 canonical source requires dataset target "
+                f"{POLICY_TARGET_OBJECT_NAME}, got {target_object!r}"
+            )
+    else:
+        if target_object and target_object != POLICY_TARGET_OBJECT_NAME:
+            raise Task525PolicyDataError(
+                f"Task525 generator source has unexpected dataset target "
+                f"{target_object!r}"
+            )
+        episode_targets = {
+            name: str(jsonable(data[name].attrs.get("target_object_name", "")))
+            for name in data
+        }
+        invalid_targets = {
+            name: target
+            for name, target in episode_targets.items()
+            if target != POLICY_TARGET_OBJECT_NAME
+        }
+        if invalid_targets:
+            raise Task525PolicyDataError(
+                "Task525 generator episodes must declare the orange target: "
+                f"{invalid_targets}"
+            )
+    contract_id = str(jsonable(data.attrs["robot_contract_id"]))
+    action_semantics = str(jsonable(data.attrs.get("action_semantics", "")))
     state_names = parse_names(
         data.attrs.get("observation_state_names"), "observation_state_names"
     )
-    if len(state_names) != 22:
+    action_names = parse_names(data.attrs.get("action_names"), "action_names")
+    expected_names = list(CANONICAL_STATE_ACTION_NAMES)
+    if state_names != expected_names:
         raise Task525PolicyDataError(
-            f"Task525 policy state must be joint19+base3, got {len(state_names)}"
+            "Task525 observation_state_names do not match the canonical "
+            f"joint22 order: {state_names}"
+        )
+    expected_source_action_names = (
+        expected_names
+        if format_name == CANONICAL_SOURCE_FORMAT
+        else list(SDG_ACTION_NAMES)
+    )
+    if action_names != expected_source_action_names:
+        raise Task525PolicyDataError(
+            f"Task525 {format_name} action_names do not match their exact order: "
+            f"{action_names}"
         )
     return {
+        "source_format": format_name,
         "source_contract_id": contract_id,
+        "source_action_semantics": action_semantics,
+        "source_action_names": action_names,
         "state_names": state_names,
-        "action_names": list(state_names),
+        "action_names": expected_names,
         "fps": source_fps(data),
     }
 
 
 def derive_policy_arrays(group: h5py.Group) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    format_name = source_format(group.parent)
     required = {
         "actions": 22,
         "obs/joint_pos": 19,
-        "obs/joint_pos_target": 19,
         "obs/base_velocity_body": 3,
     }
-    missing = [path for path in (*required, TASK_PATH) if path not in group]
+    task_path = (
+        CANONICAL_TASK_PATH
+        if format_name == CANONICAL_SOURCE_FORMAT
+        else SDG_TASK_PATH
+    )
+    if format_name == SDG_SOURCE_FORMAT:
+        required["obs/joint_pos_target"] = 19
+    missing = [path for path in (*required, task_path) if path not in group]
     if missing:
         raise Task525PolicyDataError(f"{group.name}: missing datasets {missing}")
     frames = int(group["actions"].shape[0])
@@ -157,25 +273,59 @@ def derive_policy_arrays(group: h5py.Group) -> tuple[np.ndarray, np.ndarray, np.
             raise Task525PolicyDataError(
                 f"{group.name}/{path}: {values[path].shape} != {(frames, width)}"
             )
-    tasks = np.asarray(group[TASK_PATH], dtype=np.int64).reshape(-1)
+    tasks = np.asarray(group[task_path], dtype=np.int64).reshape(-1)
     if tasks.shape != (frames,):
         raise Task525PolicyDataError(
-            f"{group.name}/{TASK_PATH}: {tasks.shape} != {(frames,)}"
+            f"{group.name}/{task_path}: {tasks.shape} != {(frames,)}"
         )
 
-    # Source action t produces the joint target observed at pre-step t+1.
-    action = np.concatenate(
-        (values["obs/joint_pos_target"][1:], values["actions"][:-1, 19:22]),
-        axis=-1,
-    ).astype(np.float32, copy=False)
-    state = np.concatenate(
-        (values["obs/joint_pos"][:-1], values["obs/base_velocity_body"][:-1]),
-        axis=-1,
-    ).astype(np.float32, copy=False)
-    tasks = tasks[:-1]
+    if format_name == CANONICAL_SOURCE_FORMAT:
+        action = values["actions"].astype(np.float32, copy=False)
+        state = np.concatenate(
+            (values["obs/joint_pos"], values["obs/base_velocity_body"]),
+            axis=-1,
+        ).astype(np.float32, copy=False)
+    else:
+        action = np.concatenate(
+            (
+                values["obs/joint_pos_target"][1:],
+                values["actions"][:-1, 19:22],
+            ),
+            axis=-1,
+        ).astype(np.float32, copy=False)
+        state = np.concatenate(
+            (
+                values["obs/joint_pos"][:-1],
+                values["obs/base_velocity_body"][:-1],
+            ),
+            axis=-1,
+        ).astype(np.float32, copy=False)
+        tasks = tasks[:-1]
     if not np.isfinite(action).all() or not np.isfinite(state).all():
         raise Task525PolicyDataError(f"{group.name}: non-finite policy array")
     return state, action, tasks
+
+
+def select_camera_map(camera_names: list[str] | tuple[str, ...]) -> dict[str, str]:
+    """Return a validated camera subset in canonical camera order."""
+
+    names = list(camera_names)
+    if not names:
+        raise Task525PolicyDataError("camera_names must be non-empty")
+    if len(names) != len(set(names)):
+        raise Task525PolicyDataError("camera_names contains duplicates")
+    unsupported = [name for name in names if name not in CANONICAL_CAMERA_MAP]
+    if unsupported:
+        raise Task525PolicyDataError(
+            f"unsupported Task525 cameras: {unsupported}; "
+            f"choose from {list(CANONICAL_CAMERA_MAP)}"
+        )
+    selected = set(names)
+    return {
+        name: output_name
+        for name, output_name in CANONICAL_CAMERA_MAP.items()
+        if name in selected
+    }
 
 
 def phase_bounds(tasks: np.ndarray, policy: str) -> tuple[int, int]:
@@ -199,6 +349,8 @@ def phase_bounds(tasks: np.ndarray, policy: str) -> tuple[int, int]:
     if policy == "pick":
         if start != 0 or set(np.unique(tasks[start:end]).tolist()) != {0, 1}:
             raise Task525PolicyDataError("pick must contain task 0 then task 1 from frame zero")
+        if np.any(np.diff(tasks[start:end]) < 0):
+            raise Task525PolicyDataError("pick task IDs must be monotonic 0 then 1")
         if end >= len(tasks) or int(tasks[end]) != 2:
             raise Task525PolicyDataError("pick must end immediately before task 2 navigation")
     elif policy == "all":

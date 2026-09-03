@@ -20,6 +20,9 @@ class Task000525VisualEventWiringTest(unittest.TestCase):
         self.assertIn("profile.coffee_visual_yaw.enabled", source)
         self.assertIn("randomize_coffee_can_visual_yaw(", source)
         self.assertIn('"coffee_can_visual_yaw"', source)
+        self.assertIn("profile.coffee_distractor_appearance.enabled", source)
+        self.assertIn("randomize_coffee_can_distractor_appearance(", source)
+        self.assertIn('"coffee_can_distractor_appearance"', source)
 
     def test_replay_guards_all_rigid_roots(self):
         source = (TASK_SCRIPTS / "replay_visual_policy_staging.py").read_text(
