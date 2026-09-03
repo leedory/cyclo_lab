@@ -45,6 +45,20 @@ class Task000525PickScopeGeneratorTest(unittest.TestCase):
         cls.tree = ast.parse(cls.source)
         cls.replay = function(cls.tree, "replay")
 
+    def test_explicit_equal_grasp_and_lift_boundary_is_supported(self):
+        resolver = function(self.tree, "resolve_grasp_boundary_step")
+        explicit_boundary = next(
+            node
+            for node in resolver.body
+            if isinstance(node, ast.If)
+            and ast.unparse(node.test)
+            == "grasp_step is not None and 0 <= grasp_step <= lift_step"
+        )
+        self.assertEqual(
+            ast.unparse(explicit_boundary.body[0]),
+            "return (grasp_step, 'explicit grasp_step')",
+        )
+
     def test_pick_scope_does_not_plan_or_run_navigation_control(self):
         parents: dict[ast.AST, ast.AST] = {}
         for parent in ast.walk(self.replay):

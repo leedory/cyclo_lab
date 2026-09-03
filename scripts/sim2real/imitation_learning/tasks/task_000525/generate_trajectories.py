@@ -424,7 +424,7 @@ def resolve_grasp_boundary_step(
     active_side: str,
     lift_step: int,
 ) -> tuple[int, str]:
-    """Resolve Task525's grasp/pull-out boundary without treating G as grasp."""
+    """Use the recorded stable-grasp boundary, with action inference as fallback."""
 
     grasp_step = episode_metadata.get("grasp_step")
     if grasp_step is not None:
@@ -432,7 +432,12 @@ def resolve_grasp_boundary_step(
             grasp_step = int(grasp_step)
         except (TypeError, ValueError):
             grasp_step = None
-    if grasp_step is not None and 0 <= grasp_step < lift_step:
+    # Current Task525 recording stores the automatic-mode G boundary in both
+    # grasp_step and lift_step. Equality is intentional: G means the lid/rim
+    # grasp and pull-out are stable, and the safe return-home transition may
+    # start. Starting from the earlier gripper-close action shears the thin rim
+    # during object-relative trajectory retargeting.
+    if grasp_step is not None and 0 <= grasp_step <= lift_step:
         return grasp_step, "explicit grasp_step"
 
     inferred = infer_grasp_close_step(input_episode_data, active_side, lift_step)
@@ -1211,7 +1216,26 @@ def replay(
                 "carry_root_xy_max_displacement_m": max_pre_navigation_root_xy_displacement,
                 "carry_root_xy_limit_m": TASK000525_MAX_PRE_NAV_ROOT_XY_DISPLACEMENT_M,
             }
-            carry_metrics = {**carry_metrics, **root_metrics}
+            initial_target_root_delta_xy = (
+                initial_object_pose[0, :2] - initial_robot_root_pose[0, :2]
+            )
+            initial_pose_metrics = {
+                "initial_target_x_m": float(initial_object_pose[0, 0].item()),
+                "initial_target_y_m": float(initial_object_pose[0, 1].item()),
+                "initial_robot_root_x_m": float(initial_robot_root_pose[0, 0].item()),
+                "initial_robot_root_y_m": float(initial_robot_root_pose[0, 1].item()),
+                "initial_target_root_dx_m": float(
+                    initial_target_root_delta_xy[0].item()
+                ),
+                "initial_target_root_dy_m": float(
+                    initial_target_root_delta_xy[1].item()
+                ),
+            }
+            carry_metrics = {
+                **carry_metrics,
+                **root_metrics,
+                **initial_pose_metrics,
+            }
             if not carry_ok:
                 return (
                     False,
