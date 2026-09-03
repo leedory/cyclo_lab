@@ -492,8 +492,6 @@ def main() -> None:
         manifest: dict[str, Any] = {
             "schema": SCHEMA,
             "created_utc": utc_now(),
-            "status": "replayed_unreviewed",
-            "training_ready": False,
             "source_hdf": str(input_path),
             "source_hdf_sha256": input_digest,
             "source_episode_count": len(names),

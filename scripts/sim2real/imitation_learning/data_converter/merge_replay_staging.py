@@ -166,8 +166,6 @@ def merge(
     manifest: dict[str, Any] = {
         "schema": SCHEMA,
         "created_utc": utc_now(),
-        "status": "filtered_unreviewed" if excluded_sources else "combined_unreviewed",
-        "training_ready": False,
         "source_hdf": [item.get("source_hdf") for item in manifests],
         "source_hdf_sha256": [item.get("source_hdf_sha256") for item in manifests],
         "source_episode_count": len(records),

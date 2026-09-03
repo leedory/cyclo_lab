@@ -23,6 +23,6 @@ Isaac-dependent render step from the final dataset writer:
 5. `data_converter/replay_staging_to_lerobot_v30.py` validates the selected
    staging set and invokes the Cyclo Intelligence LeRobot v3 writer.
 
-Every intermediate and final output remains marked `training_ready=false`
-until a reviewer explicitly accepts it. The staging scripts refuse to overwrite
-an existing output directory.
+Review decisions are tracked outside the generated dataset rather than encoded
+as `review_status` or `training_ready` gates. The staging scripts still refuse
+to overwrite an existing output directory.

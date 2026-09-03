@@ -165,8 +165,6 @@ def export(args: argparse.Namespace) -> dict[str, Any]:
         manifest: dict[str, Any] = {
             "schema": SCHEMA,
             "created_utc": utc_now(),
-            "status": "native_export_unreviewed",
-            "training_ready": False,
             "source_hdf": str(source_path),
             "source_hdf_sha256": sha256(source_path),
             "source_episode_count": len(names),
