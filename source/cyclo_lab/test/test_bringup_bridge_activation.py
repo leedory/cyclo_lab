@@ -1,11 +1,26 @@
 """Regression checks for optional bridge activation hooks in generic bringup."""
 
+import ast
 from pathlib import Path
 import unittest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 BRINGUP_PATH = REPOSITORY_ROOT / "scripts" / "sim2real" / "bringup.py"
+TASK000525_ENV_CFG_PATH = (
+    REPOSITORY_ROOT
+    / "source"
+    / "cyclo_lab"
+    / "cyclo_lab"
+    / "manager_based"
+    / "manipulation"
+    / "showroom"
+    / "config"
+    / "ffw_sg2"
+    / "tasks"
+    / "task_000525"
+    / "env_cfg.py"
+)
 
 
 class TestBringupBridgeActivation(unittest.TestCase):
@@ -26,6 +41,26 @@ class TestBringupBridgeActivation(unittest.TestCase):
         self.assertIn(
             'getattr(\n                env_cfg, "sim2real_active_trajectory_groups", None',
             source,
+        )
+
+    def test_task000525_ui_inference_activates_arms_and_head_only(self):
+        tree = ast.parse(TASK000525_ENV_CFG_PATH.read_text(encoding="utf-8"))
+        task_cfg = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "Task000525EnvCfg"
+        )
+        assignment = next(
+            node
+            for node in task_cfg.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "sim2real_active_trajectory_groups"
+        )
+
+        self.assertEqual(
+            ast.literal_eval(assignment.value),
+            ("left_arm", "right_arm", "head"),
         )
 
     def test_ui_session_requires_sg2_and_forces_cameras(self):
