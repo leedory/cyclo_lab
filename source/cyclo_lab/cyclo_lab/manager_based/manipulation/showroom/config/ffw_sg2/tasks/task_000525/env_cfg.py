@@ -87,13 +87,13 @@ def _remove_authored_showroom_objects(scene_cfg) -> None:
 class Task000525EnvCfg(EpisodicShowroomTaskEnvCfg):
     """Deterministic B-layout centers with 19 joint plus 3 base actions."""
 
-    # UI inference owns both arms and the head. Lift remains at the task reset
-    # target, while mobile velocity is handled independently and stays zero
-    # unless a policy explicitly publishes it.
+    # UI inference owns both arms, the head, and the lift. Mobile velocity is
+    # handled independently and stays zero unless a policy explicitly publishes it.
     sim2real_active_trajectory_groups: tuple[str, ...] = (
         "left_arm",
         "right_arm",
         "head",
+        "lift",
     )
     task_spec: ShowroomTaskSpec = TASK_000525_SPEC
     randomization: Task000525RandomizationCfg = TASK000525_DETERMINISTIC

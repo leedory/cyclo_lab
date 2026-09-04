@@ -369,6 +369,11 @@ class FFWSG2TopicBridge:
                         blend_anchor[name] = defaults[name]
         with self._lock:
             self._target_joint_state = targets
+            # Discard pre-B head/lift targets so activation starts from the measured pose.
+            # Continuous leader streams repopulate them immediately after activation.
+            for label in ("head", "lift"):
+                if label in self.active_trajectory_groups:
+                    self._trajectory_commands[label] = None
             self._activation_blend_anchor = blend_anchor
             self._activation_blend_start_time = time.monotonic()
             self._activation_blend_duration = float(transition_seconds)
