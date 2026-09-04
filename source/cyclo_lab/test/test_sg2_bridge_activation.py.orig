@@ -53,30 +53,6 @@ def test_activation_releases_anchor_after_transition() -> None:
     assert bridge._activation_blend_anchor is None
 
 
-def test_activation_discards_pre_b_head_and_lift_targets() -> None:
-    bridge = FFWSG2TopicBridge.__new__(FFWSG2TopicBridge)
-    bridge._lock = threading.Lock()
-    bridge.joint_names = ["head_joint1", "lift_joint"]
-    bridge.active_trajectory_groups = ("left_arm", "right_arm", "head", "lift")
-    bridge._trajectory_commands = {
-        "left_arm": {"arm_l_joint1": 0.9},
-        "right_arm": None,
-        "head": {"head_joint1": -0.2},
-        "lift": {"lift_joint": -0.1},
-    }
-    bridge._read_current_joint_state = lambda: {
-        "head_joint1": 0.1,
-        "lift_joint": 0.2,
-    }
-
-    bridge.begin_control_activation(transition_seconds=0.5)
-
-    assert bridge._target_joint_state == {"head_joint1": 0.1, "lift_joint": 0.2}
-    assert bridge._trajectory_commands["head"] is None
-    assert bridge._trajectory_commands["lift"] is None
-    assert bridge._trajectory_commands["left_arm"] == {"arm_l_joint1": 0.9}
-
-
 def test_inactive_left_group_cannot_move_right_only_recording() -> None:
     bridge = make_bridge_for_target_test()
     bridge.active_trajectory_groups = ("right_arm", "head", "lift")

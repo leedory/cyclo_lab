@@ -32,6 +32,28 @@ gym.register(
     disable_env_checker=True,
 )
 
+for _task_id in ("000001", "000002"):
+    gym.register(
+        id=f"Cyclo-Real-Showroom-Task{_task_id}-FFW-SG2-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.tasks.coffee_transport.task_{_task_id}.env_cfg:Task{_task_id}EnvCfg"
+            ),
+        },
+        disable_env_checker=True,
+    )
+    gym.register(
+        id=f"Cyclo-Real-Showroom-Task{_task_id}-Random-FFW-SG2-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.tasks.coffee_transport.task_{_task_id}.env_cfg:Task{_task_id}RandomEnvCfg"
+            ),
+        },
+        disable_env_checker=True,
+    )
+
 
 gym.register(
     id="Cyclo-Real-Showroom-Task000458-Random-FFW-SG2-v0",

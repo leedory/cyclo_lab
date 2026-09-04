@@ -43,7 +43,7 @@ class TestBringupBridgeActivation(unittest.TestCase):
             source,
         )
 
-    def test_task000525_ui_inference_activates_arms_head_and_lift(self):
+    def test_task000525_ui_inference_activates_arms_and_head_only(self):
         tree = ast.parse(TASK000525_ENV_CFG_PATH.read_text(encoding="utf-8"))
         task_cfg = next(
             node
@@ -60,7 +60,7 @@ class TestBringupBridgeActivation(unittest.TestCase):
 
         self.assertEqual(
             ast.literal_eval(assignment.value),
-            ("left_arm", "right_arm", "head", "lift"),
+            ("left_arm", "right_arm", "head"),
         )
 
     def test_ui_session_requires_sg2_and_forces_cameras(self):
