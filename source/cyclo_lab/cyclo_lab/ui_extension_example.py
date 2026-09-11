@@ -22,11 +22,17 @@ class ExampleExtension(omni.ext.IExt):
         print("[cyclo_lab] startup")
 
         self._count = 0
+        self._window = None
+        try:
+            import omni.ui as ui
+        except (ImportError, AttributeError):
+            print("[cyclo_lab] omni.ui unavailable; skipping example window")
+            return
 
-        self._window = omni.ui.Window("My Window", width=300, height=300)
+        self._window = ui.Window("My Window", width=300, height=300)
         with self._window.frame:
-            with omni.ui.VStack():
-                label = omni.ui.Label("")
+            with ui.VStack():
+                label = ui.Label("")
 
                 def on_click():
                     self._count += 1
@@ -38,9 +44,9 @@ class ExampleExtension(omni.ext.IExt):
 
                 on_reset()
 
-                with omni.ui.HStack():
-                    omni.ui.Button("Add", clicked_fn=on_click)
-                    omni.ui.Button("Reset", clicked_fn=on_reset)
+                with ui.HStack():
+                    ui.Button("Add", clicked_fn=on_click)
+                    ui.Button("Reset", clicked_fn=on_reset)
 
     def on_shutdown(self):
         print("[cyclo_lab] shutdown")

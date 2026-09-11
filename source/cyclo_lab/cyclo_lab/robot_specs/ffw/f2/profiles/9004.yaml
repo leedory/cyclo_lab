@@ -1,0 +1,37 @@
+schema_version: 1
+profile_id: f2-9004-2026-09-03
+robot:
+  model: ffw_f2
+  ssh_alias: '9004'
+cameras:
+  head:
+    topic: /camera_head/camera_head/color/camera_info
+    frame_id: camera_head_color_optical_frame
+    serial: '253822300493'
+    width: 640
+    height: 480
+    distortion_model: plumb_bob
+    d: [-0.05492270365357399, 0.06693118810653687, 0.00008280262409243733, 0.0001863493671407923, -0.022226938977837563]
+    k: [385.7976989746094, 0.0, 325.217041015625, 0.0, 385.24346923828125, 243.03517150878906, 0.0, 0.0, 1.0]
+  wrist_left:
+    topic: /camera_left/camera_left/color/camera_info
+    frame_id: camera_left_color_optical_frame
+    serial: '128422270354'
+    width: 640
+    height: 480
+    distortion_model: plumb_bob
+    d: [-0.053336020559072495, 0.056616950780153275, -0.0009594857110641897, 0.00008861145761329681, -0.01830372028052807]
+    k: [388.5531921386719, 0.0, 310.1046142578125, 0.0, 387.5739440917969, 239.23974609375, 0.0, 0.0, 1.0]
+  wrist_right:
+    topic: /camera_right/camera_right/color/camera_info
+    frame_id: camera_right_color_optical_frame
+    serial: '128422270526'
+    width: 640
+    height: 480
+    distortion_model: plumb_bob
+    d: [-0.05363556742668152, 0.05633432790637016, -0.0009155000443570316, 0.00019290107593405992, -0.01821911334991455]
+    k: [389.03973388671875, 0.0, 311.2509460449219, 0.0, 388.0103759765625, 241.22903442382812, 0.0, 0.0, 1.0]
+provenance:
+  source: read-only CameraInfo observations from SSH alias 9004
+  ai_worker_revision: ROBOTIS-GIT/ai_worker 2.2.5 (2e29aae2dee9926691922fc0fa58d97ad88e068f)
+  note: Camera settings were observed without actuation; no end-to-end real-robot F2 bridge test has been performed.

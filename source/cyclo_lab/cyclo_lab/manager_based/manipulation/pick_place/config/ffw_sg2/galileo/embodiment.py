@@ -68,7 +68,7 @@ class FFWSG2GalileoSceneCfg:
 
 @configclass
 class FFWSG2GalileoCameraCfg:
-    cam_head: CameraCfg = make_ffw_sg2_head_camera_cfg(height=480, width=640)
+    cam_head: CameraCfg = make_ffw_sg2_head_camera_cfg()
     cam_wrist_left: CameraCfg = make_ffw_sg2_wrist_camera_cfg("left")
     cam_wrist_right: CameraCfg = make_ffw_sg2_wrist_camera_cfg("right")
 

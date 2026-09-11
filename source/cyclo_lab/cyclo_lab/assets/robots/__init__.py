@@ -34,6 +34,7 @@ __version__ = CYCLO_LAB_ASSETS_METADATA["package"]["version"]
 
 from .OMY import *
 from .FFW_BG2 import *
+from .FFW_F2 import *
 from .FFW_SG2 import *
 from .FFW_SH5 import *
 from .K1_rev1 import *

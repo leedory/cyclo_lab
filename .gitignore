@@ -21,6 +21,7 @@
 **/.pytest_cache/
 **/*.pyc
 **/*.pb
+**/*.orig
 
 # Docker/Singularity
 **/*.sif

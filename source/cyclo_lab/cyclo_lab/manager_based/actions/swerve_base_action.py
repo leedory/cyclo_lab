@@ -9,6 +9,7 @@ from isaaclab.assets.articulation import Articulation
 from isaaclab.managers.action_manager import ActionTerm, ActionTermCfg
 from isaaclab.utils import configclass
 
+from cyclo_lab.robot_specs.ffw.mobile_base.controller_rate import ControllerRateScheduler
 from cyclo_lab.robot_specs.ffw.mobile_base.swerve_drive import (
     SpeedLimiter,
     SwerveControllerConfig,
@@ -56,6 +57,12 @@ class SwerveBaseVelocityAction(ActionTerm):
             self.num_envs, len(self._wheel_joint_ids), device=self.device
         )
 
+        physics_dt = float(getattr(self._env, "physics_dt", 1.0 / 60.0))
+        controller_hz = (
+            1.0 / physics_dt if cfg.controller_hz is None else float(cfg.controller_hz)
+        )
+        self._controller_rate = ControllerRateScheduler(physics_dt, controller_hz)
+
     @property
     def action_dim(self) -> int:
         return 3
@@ -67,6 +74,14 @@ class SwerveBaseVelocityAction(ActionTerm):
     @property
     def processed_actions(self) -> torch.Tensor:
         return self._processed_actions
+
+    @property
+    def controller_hz(self) -> float:
+        return self._controller_rate.controller_hz
+
+    @property
+    def physics_ticks_per_controller_update(self) -> int:
+        return self._controller_rate.physics_ticks_per_update
 
     @property
     def IO_descriptor(self):
@@ -81,7 +96,7 @@ class SwerveBaseVelocityAction(ActionTerm):
         self._raw_actions[:] = actions
         self._processed_actions[:] = torch.nan_to_num(actions.to(self.device), nan=0.0, posinf=0.0, neginf=0.0)
 
-    def apply_actions(self):
+    def _update_controller_targets(self):
         state_rows = torch.cat(
             (
                 self._processed_actions,
@@ -90,7 +105,6 @@ class SwerveBaseVelocityAction(ActionTerm):
             ),
             dim=1,
         ).detach().cpu().tolist()
-        dt = float(getattr(self._env, "physics_dt", 1.0 / 60.0))
 
         steering_targets = []
         wheel_velocity_targets = []
@@ -104,7 +118,7 @@ class SwerveBaseVelocityAction(ActionTerm):
                 float(base_command[2]),
                 current_steering_positions=steering_state,
                 current_wheel_velocities=wheel_state,
-                dt=dt,
+                dt=self._controller_rate.controller_dt,
             )
             steering_targets.append([module_command.steering_position for module_command in module_commands])
             wheel_velocity_targets.append([module_command.wheel_velocity for module_command in module_commands])
@@ -116,6 +130,11 @@ class SwerveBaseVelocityAction(ActionTerm):
             torch.as_tensor(wheel_velocity_targets, device=self.device, dtype=self._wheel_velocity_targets.dtype)
         )
 
+    def apply_actions(self):
+        if self._controller_rate.update_due():
+            self._update_controller_targets()
+
+        # Re-apply held targets every physics tick so PhysX still solves at physics_hz.
         self._asset.set_joint_position_target(self._steering_targets, joint_ids=self._steering_joint_ids)
         self._asset.set_joint_velocity_target(self._wheel_velocity_targets, joint_ids=self._wheel_joint_ids)
 
@@ -130,6 +149,7 @@ class SwerveBaseVelocityAction(ActionTerm):
             self._raw_actions[env_id] = 0.0
             self._processed_actions[env_id] = 0.0
             self._controllers[int(env_id)].reset()
+        self._controller_rate.reset()
 
     def _validate_cfg(self) -> None:
         lengths = {
@@ -167,6 +187,8 @@ class SwerveBaseVelocityAction(ActionTerm):
             self._modules,
             self.cfg.wheel_radius,
             config=SwerveControllerConfig(
+                linear_deadband=self.cfg.linear_deadband,
+                angular_deadband=self.cfg.angular_deadband,
                 enabled_speed_limits=self.cfg.enabled_speed_limits,
                 linear_x_limiter=SpeedLimiter(
                     has_acceleration_limits=True,
@@ -195,6 +217,9 @@ class SwerveBaseVelocityActionCfg(ActionTermCfg):
 
     class_type: type[ActionTerm] = SwerveBaseVelocityAction
 
+    controller_hz: float | None = None
+    """Swerve command update rate. ``None`` preserves physics-rate updates."""
+
     steering_joint_names: tuple[str, ...] = ()
     wheel_joint_names: tuple[str, ...] = ()
     module_x_offsets: tuple[float, ...] = ()
@@ -205,6 +230,8 @@ class SwerveBaseVelocityActionCfg(ActionTermCfg):
     steering_limit_upper: float = 3.141592653589793
     wheel_speed_limit_lower: float = -50.0
     wheel_speed_limit_upper: float = 50.0
+    linear_deadband: float = 0.10
+    angular_deadband: float = 0.10
     steering_angular_velocity_limit: float = 4.0
     enabled_speed_limits: bool = True
     linear_acceleration_limit: float = 0.6

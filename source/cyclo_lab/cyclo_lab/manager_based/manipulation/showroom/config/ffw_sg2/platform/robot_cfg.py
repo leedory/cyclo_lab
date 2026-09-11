@@ -5,6 +5,8 @@ from copy import deepcopy
 from isaaclab.assets.articulation import ArticulationCfg
 
 from cyclo_lab.assets.sensors.ffw_sg2_cameras import (
+    FFW_SG2_HEAD_CAMERA_HEIGHT,
+    FFW_SG2_HEAD_CAMERA_WIDTH,
     make_ffw_sg2_head_camera_cfg,
     make_ffw_sg2_overhead_camera_cfg,
     make_ffw_sg2_wrist_camera_cfg,
@@ -71,8 +73,8 @@ def apply_sg2_showroom_camera_profile(env_cfg, profile_name: str) -> None:
 
     env_cfg.scene.cam_head = make_ffw_sg2_head_camera_cfg(
         update_period=0.0,
-        width=head.width,
-        height=head.height,
+        width=FFW_SG2_HEAD_CAMERA_WIDTH,
+        height=FFW_SG2_HEAD_CAMERA_HEIGHT,
         intrinsic_matrix=head.intrinsic_matrix,
     )
     env_cfg.scene.cam_wrist_left = make_ffw_sg2_wrist_camera_cfg(
@@ -104,4 +106,12 @@ def enable_sg2_showroom_operator_cameras(env_cfg) -> None:
     )
     env_cfg.scene.cam_overhead_right = make_ffw_sg2_overhead_camera_cfg(
         "right", update_period=0.0
+    )
+
+
+def enable_sg2_showroom_ui_session_camera(env_cfg) -> None:
+    """Attach only the center external camera streamed by a UI session."""
+
+    env_cfg.scene.cam_overhead_center = make_ffw_sg2_overhead_camera_cfg(
+        "center", update_period=0.0
     )

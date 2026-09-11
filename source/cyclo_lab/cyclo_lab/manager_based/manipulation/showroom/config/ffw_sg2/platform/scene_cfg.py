@@ -20,6 +20,11 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
 
 from . import observations as showroom_obs
 from .action_cfg import ContinuousShowroomActionsCfg
+from .rates import (
+    SG2_SHOWROOM_CAMERA_HZ,
+    SG2_SHOWROOM_CONTROL_HZ,
+    SG2_SHOWROOM_PHYSICS_HZ,
+)
 
 
 SHOWROOM_CAMERA_NAMES = ("cam_head", "cam_wrist_left", "cam_wrist_right")
@@ -98,9 +103,9 @@ class ShowroomEnvCfg(ManagerBasedEnvCfg):
     """Continuous SG2 showroom environment without RL episode semantics."""
 
     env_name: str = "Cyclo-Real-Showroom-FFW-SG2-v0"
-    control_hz: float = 15.0
-    physics_hz: float = 30.0
-    camera_hz: float = 15.0
+    control_hz: float = SG2_SHOWROOM_CONTROL_HZ
+    physics_hz: float = SG2_SHOWROOM_PHYSICS_HZ
+    camera_hz: float = SG2_SHOWROOM_CAMERA_HZ
     operator_camera_rows: tuple = OPERATOR_CAMERA_ROWS
     operator_camera_rotations: tuple = OPERATOR_CAMERA_ROTATIONS
     operator_camera_title: str = "SG2 Operator Dashboard"

@@ -1,0 +1,5 @@
+"""Shared SG2 Showroom runtime rates."""
+
+SG2_SHOWROOM_CONTROL_HZ = 15.0
+SG2_SHOWROOM_PHYSICS_HZ = 120.0
+SG2_SHOWROOM_CAMERA_HZ = 15.0

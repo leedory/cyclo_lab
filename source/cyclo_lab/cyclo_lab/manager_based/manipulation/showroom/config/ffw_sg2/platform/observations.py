@@ -27,6 +27,26 @@ def eef_pose(
     )
     return torch.cat((position, quaternion), dim=1)
 
+
+def eef_pose_world(
+    env: ManagerBasedEnv,
+    eef_cfg: SceneEntityCfg = SceneEntityCfg("eef"),
+) -> torch.Tensor:
+    """Return the TCP pose in the simulation world frame."""
+
+    eef: FrameTransformer = env.scene[eef_cfg.name]
+    return torch.cat(
+        (eef.data.target_pos_w[:, 0, :], eef.data.target_quat_w[:, 0, :]), dim=1
+    )
+
+
+def asset_root_pose_world(env: ManagerBasedEnv, asset_name: str) -> torch.Tensor:
+    """Return an articulation or rigid object's root pose in world WXYZ."""
+
+    asset = env.scene[asset_name]
+    return torch.cat((asset.data.root_pos_w, asset.data.root_quat_w), dim=1)
+
+
 def joint_pos_name(env: ManagerBasedEnv, joint_names: tuple[str, ...], asset_name: str = "robot") -> torch.Tensor:
     asset: Articulation = env.scene[asset_name]
     joint_ids = [asset.joint_names.index(name) for name in joint_names]

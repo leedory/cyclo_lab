@@ -32,6 +32,9 @@ from isaaclab.sim.spawners.from_files import from_files
 from isaaclab.sim.utils import bind_physics_material, clone, make_uninstanceable
 
 from cyclo_lab.assets.robots import CYCLO_LAB_ASSETS_DATA_DIR
+from cyclo_lab.assets.robots.ffw_softgripper_collision import (
+    apply_ffw_softgripper_collision_defaults,
+)
 from cyclo_lab.robot_specs.ffw.sg2.mobile_base import (
     SG2_SWERVE_DRIVE_DAMPING as _SG2_SWERVE_DRIVE_DAMPING,
     SG2_SWERVE_STEERING_JOINTS as _SG2_SWERVE_STEERING_JOINTS,
@@ -45,8 +48,10 @@ from cyclo_lab.robot_specs.ffw.sg2.control import (
 _SG2_WHEEL_PHYSICS_MATERIAL = RigidBodyMaterialCfg(
     friction_combine_mode="max",
     restitution_combine_mode="min",
-    static_friction=2.0,
-    dynamic_friction=1.8,
+    # Validated scalar compromise from the SG2 friction/rate sweeps.  The
+    # previous 2.0/1.8 isotropic pair over-constrained swerve rotation.
+    static_friction=0.6,
+    dynamic_friction=0.5,
     restitution=0.0,
 )
 
@@ -232,6 +237,28 @@ def _bind_sg2_distal_gripper_physics_material(stage, prim_path: str, material_pa
         )
 
 
+def _apply_sg2_softgripper_physics(stage, prim_path: str) -> None:
+    material_path = f"{prim_path}/distalGripperPhysicsMaterial"
+    _SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL.func(
+        material_path, _SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL
+    )
+    _bind_sg2_distal_gripper_physics_material(stage, prim_path, material_path)
+    apply_ffw_softgripper_collision_defaults(stage, prim_path)
+
+
+@clone
+def spawn_sg2_with_softgripper_physics(
+    prim_path, cfg, translation=None, orientation=None, **kwargs
+):
+    """Spawn SG2 with the default soft-gripper collision approximation."""
+
+    prim = from_files.spawn_from_usd(prim_path, cfg, translation, orientation, **kwargs)
+    stage = get_current_stage()
+    make_uninstanceable(prim_path, stage)
+    _apply_sg2_softgripper_physics(stage, prim_path)
+    return prim
+
+
 @clone
 def spawn_sg2_with_base_physics(prim_path, cfg, translation=None, orientation=None, **kwargs):
     """Spawn SG2 with a free mobile base and wheel-contact physics helpers."""
@@ -247,9 +274,7 @@ def spawn_sg2_with_base_physics(prim_path, cfg, translation=None, orientation=No
     _SG2_WHEEL_PHYSICS_MATERIAL.func(material_path, _SG2_WHEEL_PHYSICS_MATERIAL)
     _bind_sg2_wheel_physics_material(stage, prim_path, material_path)
 
-    material_path = f"{prim_path}/distalGripperPhysicsMaterial"
-    _SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL.func(material_path, _SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL)
-    _bind_sg2_distal_gripper_physics_material(stage, prim_path, material_path)
+    _apply_sg2_softgripper_physics(stage, prim_path)
 
     _filter_sg2_base_wheel_collisions(stage, prim_path)
     return prim
@@ -391,6 +416,7 @@ def _configure_sg2_mobile_base_actuators(robot_cfg: ArticulationCfg) -> None:
     }
 
 
+FFW_SG2_CFG.spawn.func = spawn_sg2_with_softgripper_physics
 FFW_SG2_PHYSICS_CFG = deepcopy(FFW_SG2_CFG)
 FFW_SG2_PHYSICS_CFG.spawn.func = spawn_sg2_with_base_physics
 FFW_SG2_PHYSICS_CFG.spawn.rigid_props.linear_damping = 2.0

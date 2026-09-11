@@ -52,6 +52,7 @@ ODOMETRY = "nav_msgs/msg/Odometry"
 TF_MESSAGE = "tf2_msgs/msg/TFMessage"
 TWIST = "geometry_msgs/msg/Twist"
 STRING = "std_msgs/msg/String"
+UINT8 = "std_msgs/msg/UInt8"
 EMPTY = "std_msgs/msg/Empty"
 
 

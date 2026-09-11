@@ -13,6 +13,9 @@ import time
 from isaaclab.app import AppLauncher
 
 
+DEFAULT_UI_SESSION_STATUS_FILE = "/tmp/cyclo_lab_ui_session.json"
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", required=True, help="Registered Cyclo Gym task ID.")
 parser.add_argument(
@@ -29,9 +32,9 @@ parser.add_argument(
 )
 parser.add_argument(
     "--robot-profile",
-    default="1050",
+    default=None,
     help=(
-        "Robot-specific calibration profile name or YAML path for tasks that support profiles (default: 1050)."
+        "Robot-specific calibration profile name or YAML path; defaults to the task's configured profile."
     ),
 )
 parser.add_argument("--num_steps", type=int, default=0, help="Stop after this many steps; 0 runs indefinitely.")
@@ -40,8 +43,44 @@ parser.add_argument("--report_interval", type=int, default=120, help="Steps betw
 parser.add_argument("--disable_head", action="store_true", help="FFW-SH5 only: disable the head command topic.")
 parser.add_argument("--disable_lift", action="store_true", help="FFW-SH5 only: disable the lift command topic.")
 parser.add_argument("--disable_cmd_vel", action="store_true", help="FFW-SH5 only: disable mobile-base commands.")
+parser.add_argument(
+    "--keyboard_mobile",
+    "--keyboard-mobile",
+    dest="keyboard_mobile",
+    action="store_true",
+    help="Enable simultaneous W/S, A/D, Q/E keyboard control of a 22D mobile base.",
+)
+parser.add_argument(
+    "--keyboard_linear_speed",
+    type=float,
+    default=0.20,
+    help="Keyboard mobile-base translation speed in m/s (default: 0.20).",
+)
+parser.add_argument(
+    "--keyboard_angular_speed",
+    type=float,
+    default=0.40,
+    help="Keyboard mobile-base yaw speed in rad/s (default: 0.40).",
+)
+parser.add_argument(
+    "--ui-session",
+    action="store_true",
+    help="Run as a resettable, status-reporting FFW-SG2 session owned by the UI.",
+)
+parser.add_argument(
+    "--session-status-file",
+    default=DEFAULT_UI_SESSION_STATUS_FILE,
+    help=(
+        "Atomic JSON status path used by --ui-session "
+        f"(default: {DEFAULT_UI_SESSION_STATUS_FILE})."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if args_cli.ui_session:
+    if args_cli.bridge != "ffw_sg2":
+        parser.error("--ui-session requires --bridge ffw_sg2.")
+    args_cli.enable_cameras = True
 if args_cli.camera_view == "operator":
     args_cli.enable_cameras = True
 
@@ -51,11 +90,12 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import torch
 from isaaclab.envs import ManagerBasedEnvCfg
+from isaaclab.managers import RecorderManagerBaseCfg
 from isaaclab.sensors import CameraCfg
 from isaaclab_tasks.utils import parse_env_cfg
-from pynput.keyboard import Listener
 
 import cyclo_lab  # noqa: F401 - registers Cyclo Gym tasks after AppLauncher
+from cyclo_lab.runtime.simulation import SimulationSession
 
 
 class RateLimiter:
@@ -75,6 +115,25 @@ class RateLimiter:
         self.next_deadline += self.period
         if now - self.next_deadline > self.period:
             self.next_deadline = now + self.period
+
+
+_KEYBOARD_MOBILE_KEYS = frozenset(("w", "s", "a", "d", "q", "e", " "))
+_KEYBOARD_MOTION_KEYS = _KEYBOARD_MOBILE_KEYS.difference((" ",))
+
+
+def _keyboard_mobile_command(
+    pressed_keys: set[str], linear_speed: float, angular_speed: float
+) -> tuple[float, float, float] | None:
+    """Build an FFW body-frame velocity, or None when keyboard has no base input."""
+    if not pressed_keys.intersection(_KEYBOARD_MOBILE_KEYS):
+        return None
+    if " " in pressed_keys:
+        return 0.0, 0.0, 0.0
+    return (
+        linear_speed * (float("w" in pressed_keys) - float("s" in pressed_keys)),
+        linear_speed * (float("a" in pressed_keys) - float("d" in pressed_keys)),
+        angular_speed * (float("q" in pressed_keys) - float("e" in pressed_keys)),
+    )
 
 
 def _camera_sensor_names(scene_cfg) -> tuple[str, ...]:
@@ -122,34 +181,66 @@ def _camera_publish_hz(env_cfg: ManagerBasedEnvCfg, control_hz: float) -> float:
     return min(15.0, control_hz, render_hz)
 
 
+def _begin_bridge_control_activation(bridge) -> None:
+    """Activate bridges that provide a smooth transition hook."""
+
+    control_activation = getattr(bridge, "begin_control_activation", None)
+    if callable(control_activation):
+        control_activation()
+
+
 def _configure_environment():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     if not isinstance(env_cfg, ManagerBasedEnvCfg):
         raise TypeError(f"Task {args_cli.task} is not a manager-based environment.")
 
+    env_cfg.recorders = RecorderManagerBaseCfg()
+
     apply_robot_profile = getattr(env_cfg, "apply_robot_profile", None)
     if apply_robot_profile is not None:
-        if args_cli.robot_profile != getattr(env_cfg, "robot_profile", None):
+        if (
+            args_cli.robot_profile is not None
+            and args_cli.robot_profile != getattr(env_cfg, "robot_profile", None)
+        ):
             apply_robot_profile(args_cli.robot_profile)
         print(
             f"[Robot Profile] name={env_cfg.robot_profile} id={env_cfg.robot_profile_id} "
             f"sha256={env_cfg.robot_profile_sha256}"
         )
 
+    if args_cli.ui_session:
+        enable_ui_session_camera = getattr(env_cfg, "enable_ui_session_camera", None)
+        if not callable(enable_ui_session_camera):
+            raise ValueError(
+                f"Task {args_cli.task} does not support a UI-session camera."
+            )
+        enable_ui_session_camera()
+    elif args_cli.camera_view == "operator":
+        enable_operator_cameras = getattr(env_cfg, "enable_operator_preview_cameras", None)
+        if callable(enable_operator_cameras):
+            enable_operator_cameras()
+
     camera_names = _set_camera_sensors_enabled(env_cfg, args_cli.enable_cameras)
     if args_cli.enable_cameras and not camera_names:
         raise ValueError(f"Task {args_cli.task} does not expose configurable camera sensors.")
 
+    if args_cli.ui_session:
+        from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_CAMERA_TOPICS
+
+        missing_bridge_cameras = sorted(set(FFW_SG2_CAMERA_TOPICS).difference(camera_names))
+        if missing_bridge_cameras:
+            raise ValueError(
+                f"Task {args_cli.task} is missing UI-session bridge cameras: "
+                f"{missing_bridge_cameras}"
+            )
+
     if args_cli.camera_view == "operator":
-        enable_operator_cameras = getattr(env_cfg, "enable_operator_preview_cameras", None)
-        if enable_operator_cameras is not None:
-            enable_operator_cameras()
         if not getattr(env_cfg, "operator_camera_rows", None):
             raise ValueError(f"Task {args_cli.task} does not support --camera_view operator.")
     return env_cfg
 
 
-def _make_bridge(env, camera_hz: float):
+def _make_bridge(env_cfg, env, camera_hz: float):
     if args_cli.bridge == "none":
         return None
     if args_cli.bridge == "ffw_sg2":
@@ -160,6 +251,9 @@ def _make_bridge(env, camera_hz: float):
             camera_publish_hz=camera_hz,
             publish_odometry_tf=True,
             subscribe_reset=True,
+            active_trajectory_groups=getattr(
+                env_cfg, "sim2real_active_trajectory_groups", None
+            ),
         )
     if args_cli.bridge == "ffw_sh5":
         from cyclo_lab.runtime.bridges.sh5 import FFWSH5TopicBridge
@@ -176,7 +270,7 @@ def _make_bridge(env, camera_hz: float):
 
 
 def _make_operator_view(env_cfg, env):
-    if args_cli.camera_view != "operator":
+    if args_cli.ui_session or args_cli.camera_view != "operator":
         return None
     from cyclo_lab.runtime.viewers import CameraDashboard
 
@@ -203,9 +297,20 @@ def main() -> None:
     bridge = None
     operator_view = None
     keyboard_listener = None
+    session = (
+        SimulationSession(
+            task=args_cli.task,
+            bridge=args_cli.bridge,
+            status_file=args_cli.session_status_file,
+        )
+        if args_cli.ui_session
+        else None
+    )
     shutdown_requested = threading.Event()
     keyboard_start_requested = threading.Event()
     keyboard_reset_requested = threading.Event()
+    keyboard_mobile_keys: set[str] = set()
+    keyboard_mobile_lock = threading.Lock()
     previous_signal_handlers = {}
 
     def _request_shutdown(_signum, _frame) -> None:
@@ -220,6 +325,18 @@ def main() -> None:
             keyboard_start_requested.set()
         elif key_char == "r":
             keyboard_reset_requested.set()
+        if args_cli.keyboard_mobile and key_char in _KEYBOARD_MOBILE_KEYS:
+            with keyboard_mobile_lock:
+                keyboard_mobile_keys.add(key_char)
+
+    def _on_key_release(key) -> None:
+        key_char = getattr(key, "char", None)
+        if key_char is None:
+            return
+        key_char = key_char.lower()
+        if args_cli.keyboard_mobile and key_char in _KEYBOARD_MOBILE_KEYS:
+            with keyboard_mobile_lock:
+                keyboard_mobile_keys.discard(key_char)
 
     for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
         previous_signal_handlers[shutdown_signal] = signal.signal(shutdown_signal, _request_shutdown)
@@ -230,19 +347,43 @@ def main() -> None:
         env.reset()
         control_hz = _control_hz(env_cfg)
         camera_hz = _camera_publish_hz(env_cfg, control_hz) if args_cli.enable_cameras else 0.0
-        bridge = _make_bridge(env, camera_hz)
+        bridge = _make_bridge(env_cfg, env, camera_hz)
         zero_action = torch.zeros(
             (env.num_envs, env.action_manager.total_action_dim),
             device=env.device,
             dtype=torch.float32,
         )
         operator_view = _make_operator_view(env_cfg, env)
-        keyboard_listener = Listener(on_press=_on_key_press)
-        keyboard_listener.start()
+        if not args_cli.ui_session:
+            from pynput.keyboard import Listener
+
+            keyboard_listener = Listener(on_press=_on_key_press, on_release=_on_key_release)
+            keyboard_listener.start()
+
+        has_mobile_action = (
+            "base_action" in env.action_manager.active_terms
+            and env.action_manager.total_action_dim >= 3
+        )
+        if args_cli.keyboard_mobile:
+            if not has_mobile_action:
+                raise ValueError("--keyboard_mobile requires an environment with base_action.")
+            if args_cli.keyboard_linear_speed <= 0.0 or args_cli.keyboard_angular_speed <= 0.0:
+                raise ValueError("Keyboard mobile-base speeds must be positive.")
+            print(
+                "[Control] Keyboard mobile enabled: W/S forward/back, A/D strafe, "
+                "Q/E yaw, Space stop."
+            )
 
         requires_activation = bool(getattr(bridge, "requires_activation", True)) if bridge else False
         control_enabled = bridge is not None and not requires_activation
-        if bridge is None:
+        if args_cli.ui_session:
+            _begin_bridge_control_activation(bridge)
+            control_enabled = True
+            print(
+                "[Control] UI-launched simulation session; policy actions are active "
+                "and remain active after reset."
+            )
+        elif bridge is None:
             print("[Control] Zero-action mode; press R to reset the environment.")
         elif requires_activation:
             print("[Control] Press B to enable robot actions; press R to reset and stop actions.")
@@ -255,6 +396,11 @@ def main() -> None:
         start_time = report_start
         report_steps = 0
         total_steps = 0
+        observation_sequence = 0
+        camera_sequence = 0
+        force_heartbeat_after_reset = False
+        if session is not None:
+            session.ready(control_hz=control_hz, camera_hz=camera_hz)
 
         with torch.inference_mode():
             while simulation_app.is_running() and not shutdown_requested.is_set():
@@ -271,12 +417,23 @@ def main() -> None:
                 if keyboard_reset or topic_reset:
                     control_enabled = bridge is not None and not requires_activation
                     keyboard_start_requested.clear()
+                    with keyboard_mobile_lock:
+                        keyboard_mobile_keys.clear()
                     reset_source = "R key" if keyboard_reset else "/simulation/reset"
                     print(f"[Control] Reset requested by {reset_source}.")
+                    if session is not None:
+                        session.begin_reset(reset_source)
                     env.reset()
                     if bridge is not None:
                         bridge.reset()
+                        if args_cli.ui_session:
+                            _begin_bridge_control_activation(bridge)
+                            control_enabled = True
+                    if session is not None:
+                        session.finish_reset()
+                        force_heartbeat_after_reset = True
                 elif bridge is not None and requires_activation and start_requested and not control_enabled:
+                    _begin_bridge_control_activation(bridge)
                     control_enabled = True
                     print("[Control] Robot actions enabled.")
 
@@ -286,14 +443,44 @@ def main() -> None:
                     action = bridge.get_action()
                 else:
                     action = bridge.get_hold_action()
+
+                if args_cli.keyboard_mobile and (bridge is None or control_enabled):
+                    with keyboard_mobile_lock:
+                        pressed_keys = set(keyboard_mobile_keys)
+                    keyboard_command = _keyboard_mobile_command(
+                        pressed_keys,
+                        args_cli.keyboard_linear_speed,
+                        args_cli.keyboard_angular_speed,
+                    )
+                    if keyboard_command is not None:
+                        action = action.clone()
+                        action[:, -3:] = torch.tensor(
+                            keyboard_command, device=env.device, dtype=action.dtype
+                        )
                 env.step(action)
+                camera_batch_published = False
                 if bridge is not None:
-                    bridge.publish_observations()
+                    camera_batch_published = bridge.publish_observations()
+                    observation_sequence += 1
+                    if camera_batch_published:
+                        camera_sequence += 1
                 if operator_view is not None:
                     operator_view.update()
 
                 total_steps += 1
                 report_steps += 1
+                if session is not None:
+                    force_session_heartbeat = (
+                        force_heartbeat_after_reset and camera_batch_published
+                    )
+                    session.heartbeat(
+                        total_steps,
+                        observation_sequence=observation_sequence,
+                        camera_sequence=camera_sequence,
+                        force=force_session_heartbeat,
+                    )
+                    if force_session_heartbeat:
+                        force_heartbeat_after_reset = False
                 if report_interval and report_steps >= report_interval:
                     now = time.perf_counter()
                     elapsed = max(now - report_start, 1e-9)
@@ -305,18 +492,32 @@ def main() -> None:
                 rate_limiter.sleep()
     except KeyboardInterrupt:
         print("\n[INFO] Bringup interrupted.")
+    except Exception as exc:
+        if session is not None:
+            session.fail(exc)
+        raise
     finally:
-        if keyboard_listener is not None:
-            keyboard_listener.stop()
-            keyboard_listener.join(timeout=1.0)
-        if operator_view is not None:
-            operator_view.close()
-        if bridge is not None:
-            bridge.close()
-        if env is not None:
-            env.close()
-        for shutdown_signal, previous_handler in previous_signal_handlers.items():
-            signal.signal(shutdown_signal, previous_handler)
+        if session is not None:
+            session.stopping()
+        try:
+            if keyboard_listener is not None:
+                keyboard_listener.stop()
+                keyboard_listener.join(timeout=1.0)
+            if operator_view is not None:
+                operator_view.close()
+            if bridge is not None:
+                bridge.close()
+            if env is not None:
+                env.close()
+            for shutdown_signal, previous_handler in previous_signal_handlers.items():
+                signal.signal(shutdown_signal, previous_handler)
+        except Exception as exc:
+            if session is not None:
+                session.fail(exc)
+            raise
+        else:
+            if session is not None:
+                session.stopped()
 
 
 if __name__ == "__main__":

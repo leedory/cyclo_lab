@@ -44,7 +44,10 @@ setup(
     description=EXTENSION_TOML_DATA["package"]["description"],
     keywords=EXTENSION_TOML_DATA["package"]["keywords"],
     include_package_data=True,
-    package_data={"cyclo_lab.robot_specs.ffw.sg2.profiles": ["*.yaml"]},
+    package_data={
+        "cyclo_lab.robot_specs.ffw.f2.profiles": ["*.yaml"],
+        "cyclo_lab.robot_specs.ffw.sg2.profiles": ["*.yaml"],
+    },
     python_requires=">=3.10",
     install_requires=INSTALL_REQUIRES,
     dependency_links=PYTORCH_INDEX_URL,

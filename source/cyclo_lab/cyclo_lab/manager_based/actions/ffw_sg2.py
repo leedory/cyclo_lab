@@ -13,6 +13,7 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
     FFW_SG2_RIGHT_ARM_JOINT_NAMES,
     FFW_SG2_RIGHT_GRIPPER_JOINT_NAMES,
     FFW_SG2_SWERVE_ANGULAR_ACCELERATION_LIMIT,
+    FFW_SG2_SWERVE_CONTROLLER_HZ,
     FFW_SG2_SWERVE_DRIVE_SPEED_SCALE,
     FFW_SG2_SWERVE_ENABLED_SPEED_LIMITS,
     FFW_SG2_SWERVE_ENABLED_WHEEL_SATURATION_SCALING,
@@ -66,11 +67,11 @@ class FFWSG2JointPositionActionsCfg:
     gripper_r_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
         FFW_SG2_RIGHT_GRIPPER_JOINT_NAMES
     )
-    lift_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
-        FFW_SG2_LIFT_JOINT_NAMES
-    )
     head_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
         FFW_SG2_HEAD_JOINT_NAMES
+    )
+    lift_action: JointPositionActionCfg = make_ffw_sg2_joint_position_action_cfg(
+        FFW_SG2_LIFT_JOINT_NAMES
     )
 
 
@@ -78,6 +79,7 @@ def make_ffw_sg2_swerve_base_action_cfg(asset_name: str = "robot") -> SwerveBase
     """Build the shared SG2 body-velocity action configuration."""
     return SwerveBaseVelocityActionCfg(
         asset_name=asset_name,
+        controller_hz=FFW_SG2_SWERVE_CONTROLLER_HZ,
         steering_joint_names=tuple(SG2_SWERVE_STEERING_JOINTS),
         wheel_joint_names=tuple(SG2_SWERVE_WHEEL_JOINTS),
         module_x_offsets=tuple(SG2_SWERVE_MODULE_X_OFFSETS),
