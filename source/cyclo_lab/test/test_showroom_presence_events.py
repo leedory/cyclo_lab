@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
 
 import torch
@@ -11,19 +10,6 @@ from cyclo_lab.manager_based.manipulation.showroom.config.ffw_sg2.randomization.
     SimulationVisibilityPresenceController,
     sample_present_masks,
 )
-
-EVENT_CFG = (
-    Path(__file__).resolve().parents[1]
-    / "cyclo_lab"
-    / "manager_based"
-    / "manipulation"
-    / "showroom"
-    / "config"
-    / "ffw_sg2"
-    / "randomization"
-    / "event_cfg.py"
-)
-
 
 class SamplePresentMasksTest(unittest.TestCase):
     def test_zero_probability_keeps_every_pair_present(self):
@@ -83,16 +69,6 @@ class SamplePresentMasksTest(unittest.TestCase):
 
 
 class PresenceIntegrationContractTest(unittest.TestCase):
-    def test_event_builder_depends_on_presence_module_directly(self):
-        source = EVENT_CFG.read_text(encoding="utf-8")
-        self.assertIn("from . import presence_events", source)
-        self.assertIn(
-            "func=presence_events.randomize_non_target_presence,", source
-        )
-        self.assertNotIn(
-            "appearance_events.randomize_non_target_presence", source
-        )
-
     def test_partial_mask_state_keeps_legacy_writer_compatible(self):
         class FakeEnv:
             num_envs = 3

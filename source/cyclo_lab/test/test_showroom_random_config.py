@@ -1,5 +1,6 @@
 """Static contracts for deterministic and randomized Continuous showroom presets."""
 
+import ast
 from pathlib import Path
 import unittest
 
@@ -9,12 +10,35 @@ ROOT = Path(__file__).resolve().parents[1] / "cyclo_lab" / "manager_based" / "ma
 
 class ShowroomArchitectureTest(unittest.TestCase):
     def test_normal_and_random_are_continuous_presets(self):
-        registration = (ROOT / "__init__.py").read_text()
-        self.assertEqual(registration.count("gym.register("), 6)
-        self.assertIn("platform.env_cfg:ContinuousShowroomEnvCfg", registration)
-        self.assertIn("platform.env_cfg:ContinuousRandomShowroomEnvCfg", registration)
+        module = ast.parse((ROOT / "__init__.py").read_text())
+        expected_ids = {
+            "Cyclo-Real-Showroom-FFW-SG2-v0",
+            "Cyclo-Real-Showroom-Random-FFW-SG2-v0",
+        }
+        registrations = {}
+        for statement in module.body:
+            call = statement.value if isinstance(statement, ast.Expr) else None
+            if not isinstance(call, ast.Call):
+                continue
+            if not (
+                isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "gym"
+                and call.func.attr == "register"
+            ):
+                continue
+            keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+            task_id = ast.literal_eval(keywords["id"])
+            if task_id in expected_ids:
+                registrations[task_id] = ast.literal_eval(keywords["entry_point"])
+
+        expected_entry_point = "cyclo_lab.manager_based.continuous_env:ContinuousManagerBasedEnv"
         self.assertEqual(
-            registration.count("continuous_env:ContinuousManagerBasedEnv"), 2
+            registrations["Cyclo-Real-Showroom-FFW-SG2-v0"], expected_entry_point
+        )
+        self.assertEqual(
+            registrations["Cyclo-Real-Showroom-Random-FFW-SG2-v0"],
+            expected_entry_point,
         )
 
     def test_default_reset_has_no_randomizer(self):

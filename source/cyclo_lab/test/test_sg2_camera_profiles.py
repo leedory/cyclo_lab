@@ -20,9 +20,14 @@ class TestSG2CameraProfiles(unittest.TestCase):
         profile = load_sg2_camera_profile()
 
         self.assertEqual(DEFAULT_SG2_CAMERA_PROFILE, "1050")
-        self.assertEqual(profile.profile_id, "sg2-1050-2026-08-24")
+        self.assertEqual(profile.profile_id, "sg2-1050-2026-09-03")
         self.assertEqual(profile.robot_hostname, "ffw-SNPR48A1050")
-        self.assertEqual(profile.camera("head").intrinsic_matrix[0], 489.7808024)
+        self.assertEqual(
+            (profile.camera("head").height, profile.camera("head").width),
+            (376, 672),
+        )
+        self.assertEqual(profile.camera("head").intrinsic_matrix[0], 365.1824645996094)
+        self.assertEqual(profile.camera("head").serial, "11295797")
         self.assertEqual(profile.camera("wrist_left").serial, "335122270624")
         self.assertEqual(profile.camera("wrist_right").serial, "335122272052")
         self.assertEqual(len(profile.source_sha256), 64)
