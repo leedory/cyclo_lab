@@ -2,6 +2,30 @@
 Changelog for package cyclo_lab
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+2.0.4 (2026-08-24)
+------------------
+* Regenerated the K1 Rev.1 dance motion datasets to match the current URDF
+  joint and body layout.
+* Contributors: Kiwoong Park
+
+2.0.3 (2026-08-13)
+------------------
+* Updated the K1 ankle pitch and roll actuators to use their per-actuator
+  armature, stiffness, and damping values without closed-loop doubling.
+* Contributors: Kiwoong Park
+
+2.0.2 (2026-07-24)
+------------------
+* Updated the K1 ankle pitch actuator configuration to use the Q80 actuator.
+* Added nominal joint positions to the sim-to-real configuration export.
+* Updated the ``ai_sapiens`` submodule pointer.
+* Contributors: Kiwoong Park
+
+2.0.1 (2026-07-22)
+------------------
+* Updated the ``ai_sapiens`` submodule pointer.
+* Contributors: Woojin Wie
+
 2.0.0 (2026-06-26)
 ------------------
 * Renamed the extension package from ``robotis_lab`` to ``cyclo_lab``.
