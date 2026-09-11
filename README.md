@@ -283,6 +283,16 @@ python scripts/sim2real/bringup.py \
     --camera_view operator
 ```
 
+Preview the FFW F2 Continuous environment in the Robotis showroom
+
+```bash
+python scripts/sim2real/bringup.py \
+    --task Cyclo-Real-Showroom-FFW-F2-v0 \
+    --robot-profile 9004 \
+    --headless \
+    --enable_cameras
+```
+
 Record Task 000458 (pick up the Peanut Mix with the right gripper) seed
 demonstrations in the showroom. The task records the three policy cameras,
 19 SG2 joint targets, both EEF poses, and simulator state directly to HDF5 at
