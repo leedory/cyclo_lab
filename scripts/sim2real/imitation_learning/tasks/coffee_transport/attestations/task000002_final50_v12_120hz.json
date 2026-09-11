@@ -1,0 +1,77 @@
+{
+  "schema": "cyclo.coffee_transport.runtime_rate_attestation.v1",
+  "attestation_id": "coffee_transport_final450_v12_runtime_rates_20260908",
+  "review_status": "reviewed",
+  "reviewed_utc": "2026-09-08T06:43:55Z",
+  "campaign_id": "2026-09-07_coffee_transport_final450",
+  "rate_config_commit": "f106306bb450f6fb38cb3abf1f35f528b9c1b994",
+  "rate_contract": {
+    "physics_hz": 120.0,
+    "control_hz": 15.0,
+    "camera_hz": 15.0,
+    "decimation": 8,
+    "render_interval": 8,
+    "swerve_controller_hz": 30.0,
+    "swerve_update_interval_physics_steps": 4
+  },
+  "inputs": [
+    {
+      "task_id": "000002",
+      "hdf5_basename": "task_000002_orange_transport_physical_success7_partial_commanded_hold_v12.hdf5",
+      "hdf5_size_bytes": 7083792378,
+      "hdf5_sha256": "656b2a6413da7c57a51156c40d9c0010846ca6977244ba04e6e68e52dc149b53",
+      "actual_process_start_evidence": {
+        "process_started_utc": "2026-09-07T17:46:36Z",
+        "generation_log_path": "/home/robotis-ai/agents/experiments/2026-09-07_coffee_transport_final450/logs/task_000002_physical7_partial_commanded_hold_v12.log",
+        "generation_log_sha256": "d3937300dd9ffcad8f4f6ac5e6ec5325d484d1ae5eb36ed9ddf56cf725aa5032",
+        "isaac_kit_log_name": "kit_20260908_024636.log",
+        "environment_cfg": "Task000002TrajectoryGenerationEnvCfg",
+        "initial_seed": 2026110201,
+        "logged_environment_steps_s": {
+          "physics": 0.008333333333333333,
+          "rendering": 0.06666666666666667,
+          "environment": 0.06666666666666667
+        }
+      }
+    },
+    {
+      "task_id": "000002",
+      "hdf5_basename": "task_000002_orange_transport_physical_success27_partial_commanded_hold_v12_interrupted_20260908.hdf5",
+      "hdf5_size_bytes": 27145459901,
+      "hdf5_sha256": "016e85ebe764ef44d33e81b5668957aa1555e03e9c3525ee846638902565c44d",
+      "actual_process_start_evidence": {
+        "process_started_utc": "2026-09-07T21:38:24Z",
+        "generation_log_path": "/home/robotis-ai/agents/experiments/2026-09-07_coffee_transport_final450/logs/task_000002_physical27_partial_commanded_hold_v12_interrupted_20260908.log",
+        "generation_log_sha256": "5cbc17ca6712892bdf6029ac2e9ce3ef12a623a23a7398fa0dc1b6fc4f2104d1",
+        "isaac_kit_log_name": "kit_20260908_063824.log",
+        "environment_cfg": "Task000002TrajectoryGenerationEnvCfg",
+        "initial_seed": 2026110210,
+        "logged_environment_steps_s": {
+          "physics": 0.008333333333333333,
+          "rendering": 0.06666666666666667,
+          "environment": 0.06666666666666667
+        }
+      }
+    },
+    {
+      "task_id": "000002",
+      "hdf5_basename": "task_000002_orange_transport_physical_success16_clean_restart_commanded_hold_v12.hdf5",
+      "hdf5_size_bytes": 15961694820,
+      "hdf5_sha256": "f4ab1cbd900ba113391b5a2c6d1346f613fc5c7a475925bc834529d2cea6ad93",
+      "actual_process_start_evidence": {
+        "process_started_utc": "2026-09-08T05:06:57Z",
+        "generation_log_path": "/home/robotis-ai/agents/experiments/2026-09-07_coffee_transport_final450/logs/task_000002_physical16_clean_restart_commanded_hold_v12.log",
+        "generation_log_sha256": "3acee88bbbf348ae4f6a882473fb2c5ce3cf78318c27a54b2c236b5c3ab6eb07",
+        "isaac_kit_log_name": "kit_20260908_140655.log",
+        "environment_cfg": "Task000002TrajectoryGenerationEnvCfg",
+        "initial_seed": 2026110301,
+        "logged_environment_steps_s": {
+          "physics": 0.008333333333333333,
+          "rendering": 0.06666666666666667,
+          "environment": 0.06666666666666667
+        }
+      }
+    }
+  ],
+  "scope": "task_000002_closed_raw7_plus_raw27_plus_raw16"
+}

@@ -26,10 +26,31 @@ import multiprocessing
 if multiprocessing.get_start_method() != "spawn":
     multiprocessing.set_start_method("spawn", force=True)
 import argparse
+import importlib.util
+from pathlib import Path
 import contextlib
 from collections import defaultdict
 
 from isaaclab.app import AppLauncher
+
+
+def _load_task_recording_registry():
+    registry_path = (
+        Path(__file__).resolve().parents[4]
+        / "source/cyclo_lab/cyclo_lab/manager_based/manipulation/showroom/config"
+        / "ffw_sg2/tasks/recording.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "_cyclo_task_recording_registry", registry_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load task recording registry: {registry_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_TASK_RECORDING_REGISTRY = _load_task_recording_registry()
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="cyclo_lab teleoperation for cyclo_lab environments.")
@@ -84,6 +105,25 @@ parser.add_argument(
     action="store_true",
     help="Synchronize CUDA around profiled sections for more accurate GPU timing. This adds overhead.",
 )
+parser.add_argument(
+    "--keyboard_mobile",
+    action="store_true",
+    help="Enable W/S, A/D, Q/E, Space base control while preserving external /cmd_vel when idle.",
+)
+parser.add_argument(
+    "--keyboard_linear_speed",
+    type=float,
+    default=0.10,
+    help="Recording keyboard base translation speed in m/s.",
+)
+parser.add_argument(
+    "--keyboard_angular_speed",
+    type=float,
+    default=0.25,
+    help="Recording keyboard base yaw speed in rad/s.",
+)
+
+_TASK_RECORDING_REGISTRY.add_cli_arguments(parser)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -104,12 +144,17 @@ import gymnasium as gym
 
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab_tasks.utils import parse_env_cfg
-from isaaclab.managers import DatasetExportMode, RecorderTerm, TerminationTermCfg
+from isaaclab.managers import (
+    DatasetExportMode,
+    RecorderTerm,
+    TerminationTermCfg,
+)
 
 import cyclo_lab
 import os
 
 from recorder_manager.recorder_manager import StreamingRecorderManager
+
 
 class RateLimiter:
     """Keep a fixed loop schedule while allowing short overruns to catch up."""
@@ -314,12 +359,11 @@ def make_operator_view(env_cfg, env):
 def _recording_metadata(env_cfg, task_name: str, target_step_hz: float) -> dict:
     """Return explicit HDF5 contract metadata for seed-demo recording."""
     metadata = {
-        "schema_version": "cyclo_isaac_hdf5_v1",
-        "robot_contract_id": "ffw_sg2_rev1_fixed_base_19d",
+        "schema_version": "cyclo_lab_hdf5_v1",
         "control_hz": float(target_step_hz),
         "camera_hz": float(getattr(env_cfg, "camera_hz", target_step_hz)),
-        "action_semantics": "pre_step_raw_absolute_joint_position_command",
         "observation_semantics": "pre_step",
+        "obs_last_action_semantics": "previous_step_action",
         "scene_state_semantics": "post_step",
         "task_env_name": task_name,
         "task_id": str(getattr(env_cfg, "task_id", "")),
@@ -331,12 +375,9 @@ def _recording_metadata(env_cfg, task_name: str, target_step_hz: float) -> dict:
     }
 
     if args_cli.robot_type == "FFW_SG2":
-        from cyclo_lab.robot_specs.ffw.sg2 import FFW_SG2_ACTION_JOINT_NAMES, FFW_SG2_PUBLISHED_JOINT_NAMES
+        from cyclo_lab.robot_specs.ffw.sg2 import hdf5_contract_metadata
 
-        metadata["action_names"] = list(FFW_SG2_ACTION_JOINT_NAMES)
-        metadata["observation_state_names"] = list(FFW_SG2_PUBLISHED_JOINT_NAMES)
-        metadata["action_units"] = ["rad"] * 16 + ["m", "rad", "rad"]
-        metadata["observation_state_units"] = ["rad"] * 18 + ["m"]
+        metadata.update(hdf5_contract_metadata(env_cfg.actions))
 
     return metadata
 
@@ -357,7 +398,12 @@ def _set_episode_metadata(recorder_manager, metadata: dict) -> None:
             ep.metadata = dict(metadata)
 
 
-def _record_step_metadata(recorder_manager, step_index: int, target_step_hz: float, device: str) -> None:
+def _record_step_metadata(
+    recorder_manager,
+    step_index: int,
+    target_step_hz: float,
+    device: str,
+) -> None:
     timestamp_s = step_index / target_step_hz
     recorder_manager.add_to_episodes(
         "obs/timestamp_s",
@@ -370,6 +416,23 @@ def _record_step_metadata(recorder_manager, step_index: int, target_step_hz: flo
 
 
 
+def _sg2_wheel_speed_norm(env) -> float:
+    """Return the largest SG2 drive-wheel speed norm across environments."""
+
+    from cyclo_lab.robot_specs.ffw.sg2 import SG2_SWERVE_WHEEL_JOINTS
+
+    robot = env.scene["robot"]
+    joint_ids, joint_names = robot.find_joints(
+        list(SG2_SWERVE_WHEEL_JOINTS), preserve_order=True
+    )
+    if len(joint_ids) != len(SG2_SWERVE_WHEEL_JOINTS):
+        raise RuntimeError(f"Failed to resolve SG2 wheel joints: {joint_names}")
+    return float(
+        torch.linalg.vector_norm(robot.data.joint_vel[:, joint_ids], dim=1)
+        .amax()
+        .item()
+    )
+
 def main():
     """Running cyclo_lab teleoperation with cyclo_lab manipulation environment."""
 
@@ -379,9 +442,17 @@ def main():
     # create directory if it does not exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+    task_recording_factory = _TASK_RECORDING_REGISTRY.build_recording_factory(
+        args_cli
+    )
+
+
 
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     env_cfg.init_action_cfg("record")
+    if task_recording_factory is not None:
+        task_recording_factory.configure_env_cfg(env_cfg)
+
     env_cfg.seed = args_cli.seed
     task_name = args_cli.task
     if args_cli.camera_view == "operator":
@@ -403,6 +474,7 @@ def main():
 
     # create environment
     env: ManagerBasedRLEnv = gym.make(task_name, cfg=env_cfg).unwrapped
+    task_recording_controller = None
 
     del env.recorder_manager
     # Ensure dataset file handler is created, but keep stepping in no-save mode
@@ -436,6 +508,9 @@ def main():
             mode='record',
             camera_publish_hz=None if args_cli.publish_camera_topics else 0.0,
             publish_odometry_tf=args_cli.publish_extra_state_topics,
+            keyboard_mobile=args_cli.keyboard_mobile,
+            keyboard_linear_speed=args_cli.keyboard_linear_speed,
+            keyboard_angular_speed=args_cli.keyboard_angular_speed,
         )
     else:
         raise ValueError(
@@ -444,7 +519,6 @@ def main():
 
     start_record_state = False
     recorded_step_index = 0
-
     def clear_episode_cache(context: str):
         try:
             env.recorder_manager._clear_episode_cache()
@@ -467,6 +541,8 @@ def main():
         if not start_record_state:
             print("[Control] Save ignored because recording has not started.")
             return
+        if task_recording_controller is not None and not task_recording_controller.validate_save():
+            return
         should_reset_task_success = True
 
     teleop_interface.add_callback("R", reset_recording_instance)
@@ -475,13 +551,26 @@ def main():
     target_step_hz = args_cli.step_hz
     if target_step_hz is None:
         target_step_hz = getattr(env_cfg, "recording_control_hz", 60.0)
+    if task_recording_factory is not None:
+        task_recording_controller = task_recording_factory.create(
+            env, teleop_interface, control_hz=target_step_hz,
+            wheel_speed_norm=_sg2_wheel_speed_norm,
+        )
+        task_recording_controller.register_callbacks(
+            is_recording=lambda: start_record_state,
+            recorded_step=lambda: recorded_step_index,
+        )
     rate_limiter = RateLimiter(target_step_hz)
     recording_metadata = _recording_metadata(env_cfg, task_name, target_step_hz)
+    if task_recording_controller is not None:
+        recording_metadata.update(task_recording_controller.dataset_metadata())
     _set_dataset_metadata(env.recorder_manager, recording_metadata)
 
     # reset environment
     env.reset()
     teleop_interface.reset()
+    if task_recording_controller is not None:
+        task_recording_controller.after_initial_reset()
     operator_view = make_operator_view(env_cfg, env)
 
     current_recorded_demo_count = 0
@@ -492,10 +581,21 @@ def main():
         nonlocal start_record_state, recorded_step_index
         if start_record_state:
             return
+        if args_cli.robot_type == "FFW_SG2":
+            wheel_speed_norm = _sg2_wheel_speed_norm(env)
+            if wheel_speed_norm > 0.1:
+                print(
+                    "[Control] Recording was not started because the SG2 wheels "
+                    f"are still moving ({wheel_speed_norm:.3f} rad/s > 0.100 rad/s). "
+                    "Wait for the robot to settle, then press B again."
+                )
+                return
         clear_episode_cache("pre-recording")
         env.recorder_manager.recording_enabled = True
         env.recorder_manager.record_post_reset(torch.arange(env.num_envs, device=env.device))
         recorded_step_index = 0
+        if task_recording_controller is not None:
+            task_recording_controller.on_recording_started()
         start_record_state = True
         print("Start Recording!!!")
 
@@ -518,6 +618,10 @@ def main():
                     should_start_recording_instance = False
                     with profiler.time("start_recording"):
                         start_recording_instance()
+                    # ``actions`` was sampled before B established the recording
+                    # controller's anchors. Refresh it so the first frame uses
+                    # the newly anchored absolute-command blend.
+                    actions = teleop_interface.get_action()
                 if should_reset_task_success:
                     with profiler.time("save_success_export"):
                         should_reset_task_success = False
@@ -535,6 +639,9 @@ def main():
                         try:
                             episode_metadata = dict(recording_metadata)
                             episode_metadata["operator_accepted"] = True
+                            if task_recording_controller is not None:
+                                episode_metadata.update(task_recording_controller.episode_metadata())
+
                             for ep in getattr(env.recorder_manager, "_episodes", {}).values():
                                 if ep is not None and not ep.is_empty():
                                     ep.success = True
@@ -545,6 +652,9 @@ def main():
                         env.recorder_manager.cfg.dataset_export_mode = DatasetExportMode.EXPORT_ALL
                         env.recorder_manager.export_episodes(from_step=False)
                         env.recorder_manager.cfg.dataset_export_mode = DatasetExportMode.EXPORT_NONE
+                        if task_recording_controller is not None:
+                            task_recording_controller.advance_seed()
+
                         should_reset_recording_instance = True
                         if env.recorder_manager.exported_successful_episode_count > current_recorded_demo_count:
                             current_recorded_demo_count = env.recorder_manager.exported_successful_episode_count
@@ -556,6 +666,8 @@ def main():
                         clear_episode_cache("recording")
 
                         env.reset()
+                        if task_recording_controller is not None:
+                            task_recording_controller.on_environment_reset()
                         should_reset_recording_instance = False
                         if start_record_state:
                             print("Stop Recording!!!")
@@ -589,8 +701,20 @@ def main():
                         # Handle tensor actions
                         if actions.ndim == 1:
                             actions = actions.unsqueeze(0)
+                        if task_recording_controller is not None:
+                            actions = task_recording_controller.apply_actions(
+                                actions, recording=start_record_state,
+                                step_index=recorded_step_index,
+                            )
                         if start_record_state and env.recorder_manager.recording_enabled:
-                            _record_step_metadata(env.recorder_manager, recorded_step_index, target_step_hz, env.device)
+                            _record_step_metadata(
+                                env.recorder_manager, recorded_step_index,
+                                target_step_hz, env.device,
+                            )
+                            if task_recording_controller is not None:
+                                task_recording_controller.record_step_metadata(
+                                    env.recorder_manager, env.device
+                                )
                             recorded_step_index += 1
                         with profiler.time("env_step"):
                             env.step(actions)
@@ -605,6 +729,8 @@ def main():
     # close the simulator
     if operator_view is not None:
         operator_view.close()
+    if task_recording_controller is not None:
+        task_recording_controller.before_shutdown()
     teleop_interface.shutdown()
     profiler.remove_hooks()
     release_camera_sensors_before_close(env)

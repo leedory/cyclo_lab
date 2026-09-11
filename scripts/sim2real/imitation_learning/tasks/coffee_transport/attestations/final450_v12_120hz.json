@@ -1,0 +1,39 @@
+{
+  "schema": "cyclo.coffee_transport.runtime_rate_attestation.v1",
+  "attestation_id": "coffee_transport_final450_v12_runtime_rates_20260908",
+  "review_status": "reviewed",
+  "reviewed_utc": "2026-09-08T00:22:27Z",
+  "campaign_id": "2026-09-07_coffee_transport_final450",
+  "rate_config_commit": "f106306bb450f6fb38cb3abf1f35f528b9c1b994",
+  "rate_contract": {
+    "physics_hz": 120.0,
+    "control_hz": 15.0,
+    "camera_hz": 15.0,
+    "decimation": 8,
+    "render_interval": 8,
+    "swerve_controller_hz": 30.0,
+    "swerve_update_interval_physics_steps": 4
+  },
+  "inputs": [
+    {
+      "task_id": "000001",
+      "hdf5_basename": "task_000001_orange_transport_physical_success50_commanded_hold_v12.hdf5",
+      "hdf5_size_bytes": 33338610922,
+      "hdf5_sha256": "1fa50db03aca7afcd03f29c4676d99127705a09f75d85ee7085b3cb86bc66de6",
+      "actual_process_start_evidence": {
+        "process_started_utc": "2026-09-07T17:46:36Z",
+        "generation_log_path": "/home/robotis-ai/agents/experiments/2026-09-07_coffee_transport_final450/logs/task_000001_physical50_commanded_hold_v12.log",
+        "generation_log_sha256": "78ded51b0f12f1a4bd6cf98e482fd90c45062604454c00a621ff76d43743012e",
+        "isaac_kit_log_name": "kit_20260908_024636.log",
+        "environment_cfg": "Task000001TrajectoryGenerationEnvCfg",
+        "initial_seed": 2026110101,
+        "logged_environment_steps_s": {
+          "physics": 0.008333333333333333,
+          "rendering": 0.06666666666666667,
+          "environment": 0.06666666666666667
+        }
+      }
+    }
+  ],
+  "scope": "task_000001_closed_raw50_only"
+}
