@@ -41,13 +41,13 @@ class PresenceRandomizationCfg:
 class LightingRandomizationCfg:
     # The dome is shared by all parallel environments and is sampled once per run.
     enabled: bool = False
-    dome_intensity_range: tuple[float, float] = (2400.0, 3600.0)
+    dome_intensity_range: tuple[float, float] = (250, 3600.0)
     dome_rgb_range: tuple[tuple[float, float], ...] = (
         (0.705, 0.795),
         (0.705, 0.795),
         (0.705, 0.795),
     )
-    weak_key_intensity_range: tuple[float, float] = (0.0, 5000.0)
+    weak_key_intensity_range: tuple[float, float] = (0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -71,9 +71,9 @@ class CameraRandomizationCfg:
     enabled: bool = False
     camera_names: tuple[str, ...] = ()
     coupled_focal_scale_range: tuple[float, float] = (0.95, 1.05)
-    local_roll_max_rad: float = math.radians(5.0)
-    local_pitch_max_rad: float = math.radians(5.0)
-    local_yaw_max_rad: float = math.radians(5.0)
+    local_roll_max_rad: float = math.radians(1.0)
+    local_pitch_max_rad: float = math.radians(1.0)
+    local_yaw_max_rad: float = math.radians(1.0)
 
 
 @dataclass(frozen=True)

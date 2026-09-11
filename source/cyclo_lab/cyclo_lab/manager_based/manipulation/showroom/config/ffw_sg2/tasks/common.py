@@ -25,9 +25,15 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
 from ..platform import observations as showroom_obs
 from ..platform.action_cfg import EpisodicShowroomActionsCfg
 from ..platform.env_cfg import DeterministicResetEventsCfg
+from ..platform.rates import (
+    SG2_SHOWROOM_CAMERA_HZ,
+    SG2_SHOWROOM_CONTROL_HZ,
+    SG2_SHOWROOM_PHYSICS_HZ,
+)
 from ..platform.robot_cfg import (
     apply_sg2_showroom_camera_profile,
     enable_sg2_showroom_operator_cameras,
+    enable_sg2_showroom_ui_session_camera,
     make_sg2_showroom_robot_cfg,
 )
 from ..randomization.cfg import (
@@ -58,9 +64,9 @@ class ShowroomTaskSpec:
     environment_usd_path: str
     policy_cameras: tuple[str, ...] = ("cam_head", "cam_wrist_left", "cam_wrist_right")
     robot_profile: str = DEFAULT_SG2_CAMERA_PROFILE
-    control_hz: float = 15.0
-    physics_hz: float = 30.0
-    camera_hz: float = 15.0
+    control_hz: float = SG2_SHOWROOM_CONTROL_HZ
+    physics_hz: float = SG2_SHOWROOM_PHYSICS_HZ
+    camera_hz: float = SG2_SHOWROOM_CAMERA_HZ
     episode_length_s: float = 120.0
 
 
@@ -152,10 +158,10 @@ class EpisodicShowroomTaskEnvCfg(ManagerBasedRLEnvCfg):
     randomization: ShowroomRandomizationCfg | ShowroomGenerationRandomizationCfg = (
         NO_RANDOMIZATION
     )
-    control_hz: float = 15.0
-    physics_hz: float = 30.0
-    camera_hz: float = 15.0
-    recording_control_hz: float = 15.0
+    control_hz: float = SG2_SHOWROOM_CONTROL_HZ
+    physics_hz: float = SG2_SHOWROOM_PHYSICS_HZ
+    camera_hz: float = SG2_SHOWROOM_CAMERA_HZ
+    recording_control_hz: float = SG2_SHOWROOM_CONTROL_HZ
     operator_camera_rows: tuple = OPERATOR_CAMERA_ROWS
     operator_camera_rotations: tuple = OPERATOR_CAMERA_ROTATIONS
     operator_camera_title: str = "SG2 Task Operator Dashboard"
@@ -232,6 +238,9 @@ class EpisodicShowroomTaskEnvCfg(ManagerBasedRLEnvCfg):
 
     def enable_operator_preview_cameras(self) -> None:
         enable_sg2_showroom_operator_cameras(self)
+
+    def enable_ui_session_camera(self) -> None:
+        enable_sg2_showroom_ui_session_camera(self)
 
     def init_action_cfg(self, mode: str) -> None:
         if mode not in ("record", "inference"):

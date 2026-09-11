@@ -9,6 +9,7 @@ import isaaclab.utils.math as PoseUtils
 
 from cyclo_lab.manager_based.manipulation.common import FFWSG2MimicEnv
 
+from ...platform.replay_state import prepare_sg2_position_replay_state
 from . import takeout_terms
 
 
@@ -16,9 +17,9 @@ ACTION_DIM = 19
 INACTIVE_JOINT_NAMES = (
     *(f"arm_l_joint{index}" for index in range(1, 8)),
     "gripper_l_joint1",
-    "lift_joint",
     "head_joint1",
     "head_joint2",
+    "lift_joint",
 )
 INACTIVE_ACTION_INDICES = (*range(0, 8), *range(16, 19))
 RIGHT_MIMIC_ACTION_INDICES = tuple(range(8, 16))
@@ -108,7 +109,10 @@ class Task000458MimicEnv(FFWSG2MimicEnv):
 
     def reset_to(self, state, env_ids, seed=None, is_relative=False):
         _, extras = super().reset_to(
-            state, env_ids, seed=seed, is_relative=is_relative
+            prepare_sg2_position_replay_state(state),
+            env_ids,
+            seed=seed,
+            is_relative=is_relative,
         )
         self._finish_episode_reset(env_ids)
         return self.obs_buf, extras

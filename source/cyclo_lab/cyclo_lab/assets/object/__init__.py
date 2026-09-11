@@ -48,3 +48,5 @@ from .peanut_mix_bag import *
 from .tteokbokki_cup_noodle import *
 from .roasted_chestnut_bag import *
 from .jelly_bag import *
+from .coffee_can import *
+from .ivory_table_mat import *

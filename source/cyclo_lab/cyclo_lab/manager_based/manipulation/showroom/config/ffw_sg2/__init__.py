@@ -32,6 +32,42 @@ gym.register(
     disable_env_checker=True,
 )
 
+for _task_id in ("000001", "000002"):
+    gym.register(
+        id=f"Cyclo-Real-Showroom-Task{_task_id}-FFW-SG2-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.tasks.coffee_transport.task_{_task_id}.env_cfg:Task{_task_id}EnvCfg"
+            ),
+        },
+        disable_env_checker=True,
+    )
+    gym.register(
+        id=f"Cyclo-Real-Showroom-Task{_task_id}-Random-FFW-SG2-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.tasks.coffee_transport.task_{_task_id}.env_cfg:Task{_task_id}RandomEnvCfg"
+            ),
+        },
+        disable_env_checker=True,
+    )
+    gym.register(
+        id=(
+            f"Cyclo-Real-Showroom-Task{_task_id}-Trajectory-Generation-"
+            "FFW-SG2-v0"
+        ),
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.tasks.coffee_transport.trajectory_generation_env:"
+                f"Task{_task_id}TrajectoryGenerationEnvCfg"
+            ),
+        },
+        disable_env_checker=True,
+    )
+
 
 gym.register(
     id="Cyclo-Real-Showroom-Task000458-Random-FFW-SG2-v0",
@@ -63,6 +99,56 @@ gym.register(
         "env_cfg_entry_point": (
             f"{__name__}.tasks.task_000458.mimic_cfg:Task000458MimicGenerateEnvCfg"
         )
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Cyclo-Real-Showroom-Task000525-FFW-SG2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.tasks.task_000525.env_cfg:Task000525EnvCfg"
+        ),
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Cyclo-Real-Showroom-Task000525-Random-FFW-SG2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.tasks.task_000525.env_cfg:Task000525RandomEnvCfg"
+        ),
+    },
+    disable_env_checker=True,
+)
+_TASK525_LOCOMANIPULATION_SDG_ENTRY_POINT = (
+    f"{__name__}.tasks.task_000525.locomanipulation_sdg_env:"
+    "Task000525LocomanipulationSDGEnv"
+)
+
+_TASK525_TRAJECTORY_GENERATION_CFG = (
+    f"{__name__}.tasks.task_000525.locomanipulation_sdg_env:"
+    "Task000525TrajectoryGenerationEnvCfg"
+)
+
+gym.register(
+    id="Cyclo-Real-Showroom-Task000525-Trajectory-Generation-FFW-SG2-v0",
+    entry_point=_TASK525_LOCOMANIPULATION_SDG_ENTRY_POINT,
+    kwargs={"env_cfg_entry_point": _TASK525_TRAJECTORY_GENERATION_CFG},
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Cyclo-Real-Showroom-Task000525-Locomanipulation-SDG-FFW-SG2-v0",
+    entry_point=_TASK525_LOCOMANIPULATION_SDG_ENTRY_POINT,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.tasks.task_000525.locomanipulation_sdg_env:"
+            "Task000525LocomanipulationSDGEnvCfg"
+        ),
     },
     disable_env_checker=True,
 )
