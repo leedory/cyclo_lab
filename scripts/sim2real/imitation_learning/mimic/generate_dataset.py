@@ -27,6 +27,8 @@ Main data generation script.
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+from pathlib import Path
+import sys
 
 from isaaclab.app import AppLauncher
 
@@ -34,6 +36,14 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Generate demonstrations for Isaac Lab environments.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--generation_num_trials", type=int, help="Number of demos to be generated.", default=None)
+parser.add_argument(
+    "--generation_guarantee",
+    action="store_true",
+    help="Stop after generation_num_trials successful demos instead of attempts.",
+)
+parser.add_argument("--generation_seed", type=int, default=None, help="Override the MimicGen random seed.")
+parser.add_argument("--physics_hz", type=float, default=None, help="Optional physics rate matching source capture.")
+parser.add_argument("--camera_hz", type=float, default=None, help="Optional camera render rate matching source capture.")
 parser.add_argument(
     "--num_envs", type=int, default=1, help="Number of environments to instantiate for generating datasets."
 )
@@ -65,6 +75,13 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
+_IMITATION_LEARNING_ROOT = Path(__file__).resolve().parents[1]
+if str(_IMITATION_LEARNING_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMITATION_LEARNING_ROOT))
+from local_plugins import load_for_task, task_name_from_hdf5  # noqa: E402
+_PLUGIN_TASK_NAME = args_cli.task or task_name_from_hdf5(args_cli.input_file)
+_LOCAL_PLUGINS = load_for_task(_PLUGIN_TASK_NAME)
+_LOCAL_PLUGINS.configure_launcher_args(args_cli)
 
 if args_cli.enable_pinocchio:
     # Import pinocchio before AppLauncher to force the use of the version installed by IsaacLab and not the one installed by Isaac Sim
@@ -93,11 +110,14 @@ import isaaclab_mimic.envs  # noqa: F401
 if args_cli.enable_pinocchio:
     import isaaclab_mimic.envs.pinocchio_envs  # noqa: F401
 from isaaclab_mimic.datagen.generation import env_loop, setup_async_generation, setup_env_config
+import isaaclab_mimic.datagen.generation as mimic_generation
 from isaaclab_mimic.datagen.utils import get_env_name_from_dataset, setup_output_paths
 
 import isaaclab_tasks  # noqa: F401
 
 import cyclo_lab  # noqa: F401
+_LOCAL_PLUGINS.register_environments()
+from cyclo_lab.manager_based.manipulation.common.recording import disable_recorded_camera_observations
 
 
 def main():
@@ -123,7 +143,24 @@ def main():
         device=args_cli.device,
         generation_num_trials=args_cli.generation_num_trials,
     )
+    if args_cli.generation_guarantee:
+        env_cfg.datagen_config.generation_guarantee = True
+    if args_cli.generation_seed is not None:
+        env_cfg.datagen_config.seed = args_cli.generation_seed
     env_cfg.init_action_cfg("mimic_ik")
+    if args_cli.physics_hz is not None or args_cli.camera_hz is not None:
+        from cyclo_lab.manager_based.manipulation.common.recording import configure_recording_rates
+
+        control_hz, physics_hz, camera_hz = configure_recording_rates(
+            env_cfg, physics_hz=args_cli.physics_hz, camera_hz=args_cli.camera_hz
+        )
+        print(
+            f"[MimicGen] Rates: control={control_hz:g} Hz, "
+            f"physics={physics_hz:g} Hz, cameras={camera_hz:g} Hz",
+            flush=True,
+        )
+    disabled_cameras = disable_recorded_camera_observations(env_cfg)
+    print(f"[MimicGen] Camera observations disabled in HDF5: {disabled_cameras}")
     # Create environment
     env = gym.make(env_name, cfg=env_cfg).unwrapped
 
@@ -174,14 +211,21 @@ def main():
         env.cfg.datagen_config.use_skillgen = True
 
     # Setup and run async data generation
-    async_components = setup_async_generation(
-        env=env,
-        num_envs=args_cli.num_envs,
-        input_file=args_cli.input_file,
-        success_term=success_term,
-        pause_subtask=args_cli.pause_subtask,
-        motion_planners=motion_planners,  # Pass the motion planners dictionary
-    )
+    generator_class = mimic_generation.DataGenerator
+    local_generator_class = _LOCAL_PLUGINS.mimic_data_generator_class()
+    if local_generator_class is not None:
+        mimic_generation.DataGenerator = local_generator_class
+    try:
+        async_components = setup_async_generation(
+            env=env,
+            num_envs=args_cli.num_envs,
+            input_file=args_cli.input_file,
+            success_term=success_term,
+            pause_subtask=args_cli.pause_subtask,
+            motion_planners=motion_planners,  # Pass the motion planner dictionary
+        )
+    finally:
+        mimic_generation.DataGenerator = generator_class
 
     try:
         data_gen_tasks = asyncio.ensure_future(asyncio.gather(*async_components["tasks"]))

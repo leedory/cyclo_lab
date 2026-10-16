@@ -22,17 +22,17 @@ import numpy as np
 import trimesh
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
-from cyclo_lab.assets.robots.ffw_softgripper_geometry import banana_points
+from cyclo_lab.assets.robots.ffw_softgripper_geometry import softgripper_source_points
 
 FFW_SOFTGRIPPER_BAND_FRACTIONS = (0.0, 0.31, 0.62, 0.78, 0.90, 1.0)
 FFW_SOFTGRIPPER_BAND_OVERLAP_FRACTION = 0.015
 
 _DISTAL_LINK_PATTERN = re.compile(
-    r"/gripper_[lr]_[^/]*_(?P<finger>[lr]2)/collisions(?:/|_)",
+    r"/gripper_(?P<side>[lr])_[^/]*_(?P<finger>[lr]2)/collisions(?:/|_)",
     re.IGNORECASE,
 )
 _CONTACT_LAST_ATTRIBUTE = "physxScene:solveArticulationContactLast"
-_PROXY_SUFFIX = "_cyclo_banana_proxy"
+_PROXY_SUFFIX = "_cyclo_softgripper_proxy"
 
 
 def _triangulate(face_vertex_counts, face_vertex_indices) -> np.ndarray:
@@ -91,12 +91,12 @@ def _distal_collision_meshes(stage, robot_prim_path: str):
             continue
         if UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get() is False:
             continue
-        matches.append((prim, link_match.group("finger").lower()))
+        matches.append(prim)
 
     if len(matches) != 4:
         raise RuntimeError(
             "Expected four FFW distal collision meshes, found "
-            f"{[str(prim.GetPath()) for prim, _ in matches]} below {robot_prim_path}"
+            f"{[str(prim.GetPath()) for prim in matches]} below {robot_prim_path}"
         )
     return matches
 
@@ -130,7 +130,7 @@ def _author_convex_piece(stage, path, hull: trimesh.Trimesh, source_prim) -> Non
     _copy_material_bindings(source_prim, proxy.GetPrim())
 
 
-def _replace_distal_mesh(stage, source_prim, finger: str) -> tuple[int, float]:
+def _replace_distal_mesh(stage, source_prim) -> int:
     source_mesh = UsdGeom.Mesh(source_prim)
     points = np.asarray(source_mesh.GetPointsAttr().Get(), dtype=np.float64)
     triangles = _triangulate(
@@ -140,7 +140,7 @@ def _replace_distal_mesh(stage, source_prim, finger: str) -> tuple[int, float]:
     if points.ndim != 2 or points.shape[1] != 3 or len(triangles) == 0:
         raise RuntimeError(f"Invalid distal collision mesh: {source_prim.GetPath()}")
 
-    points, long_axis, _, tip_deflection = banana_points(points, finger)
+    points, long_axis = softgripper_source_points(points)
     face_centers = points[triangles].mean(axis=1)[:, long_axis]
     lower = float(points[:, long_axis].min())
     long_span = float(np.ptp(points[:, long_axis]))
@@ -184,21 +184,53 @@ def _replace_distal_mesh(stage, source_prim, finger: str) -> tuple[int, float]:
         )
 
     UsdPhysics.CollisionAPI(source_prim).GetCollisionEnabledAttr().Set(False)
-    return piece_count, tip_deflection
+    return piece_count
+
+
+def _filter_opposing_distal_proxy_contacts(stage, robot_prim_path: str) -> int:
+    """Keep external grasp contacts while allowing opposing soft fingertips to meet."""
+
+    robot_prim = stage.GetPrimAtPath(robot_prim_path)
+    pieces = {(side, finger): [] for side in ("l", "r") for finger in ("l2", "r2")}
+    for prim in Usd.PrimRange(robot_prim):
+        path = str(prim.GetPath())
+        if _PROXY_SUFFIX not in path:
+            continue
+        match = _DISTAL_LINK_PATTERN.search(path)
+        if match is None or not prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        if UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get() is False:
+            continue
+        pieces[(match.group("side").lower(), match.group("finger").lower())].append(prim)
+
+    expected = len(FFW_SOFTGRIPPER_BAND_FRACTIONS) - 1
+    piece_counts = {key: len(group) for key, group in pieces.items()}
+    if any(count != expected for count in piece_counts.values()):
+        raise RuntimeError(
+            f"Expected {expected} enabled collision pieces per SG2 soft fingertip, "
+            f"found {piece_counts} below {robot_prim_path}."
+        )
+
+    filtered_pairs = 0
+    for side in ("l", "r"):
+        for source in pieces[(side, "r2")]:
+            relation = UsdPhysics.FilteredPairsAPI.Apply(source).CreateFilteredPairsRel()
+            for target in pieces[(side, "l2")]:
+                relation.AddTarget(target.GetPath())
+                filtered_pairs += 1
+    return filtered_pairs
 
 
 def apply_ffw_softgripper_collision_defaults(stage, robot_prim_path: str) -> None:
-    """Enable contact-last and replace four distal meshes with mild banana proxies."""
+    """Use convex pieces of the unmodified soft mesh and allow fingertip contact."""
 
     _enable_contact_last(stage)
     piece_count = 0
-    deflections = []
-    for source_prim, finger in _distal_collision_meshes(stage, robot_prim_path):
-        authored, deflection = _replace_distal_mesh(stage, source_prim, finger)
-        piece_count += authored
-        deflections.append(deflection)
+    for source_prim in _distal_collision_meshes(stage, robot_prim_path):
+        piece_count += _replace_distal_mesh(stage, source_prim)
+    filtered_pairs = _filter_opposing_distal_proxy_contacts(stage, robot_prim_path)
     print(
         "[FFW softgripper physics] enabled contact-last and replaced 4 distal "
-        f"colliders with {piece_count} closed banana-proxy pieces; "
-        f"tip deflection local units={min(deflections):.6g}..{max(deflections):.6g}."
+        f"colliders with {piece_count} convex pieces from unmodified soft meshes; "
+        f"filtered {filtered_pairs} opposing fingertip proxy pairs."
     )

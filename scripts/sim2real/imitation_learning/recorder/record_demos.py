@@ -26,8 +26,12 @@ import multiprocessing
 if multiprocessing.get_start_method() != "spawn":
     multiprocessing.set_start_method("spawn", force=True)
 import argparse
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
+import sys
 import contextlib
 from collections import defaultdict
 
@@ -51,6 +55,16 @@ def _load_task_recording_registry():
 
 
 _TASK_RECORDING_REGISTRY = _load_task_recording_registry()
+
+_IMITATION_LEARNING_ROOT = Path(__file__).resolve().parents[1]
+if str(_IMITATION_LEARNING_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMITATION_LEARNING_ROOT))
+from local_plugins import load_for_task  # noqa: E402
+
+_task_probe = argparse.ArgumentParser(add_help=False)
+_task_probe.add_argument("--task")
+_task_probe_args, _ = _task_probe.parse_known_args()
+_LOCAL_PLUGINS = load_for_task(_task_probe_args.task)
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="cyclo_lab teleoperation for cyclo_lab environments.")
@@ -124,11 +138,13 @@ parser.add_argument(
 )
 
 _TASK_RECORDING_REGISTRY.add_cli_arguments(parser)
+_LOCAL_PLUGINS.add_cli_arguments(parser)
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
+_LOCAL_PLUGINS.configure_launcher_args(args_cli)
 if args_cli.camera_view == "operator":
     args_cli.enable_cameras = True
 
@@ -152,6 +168,8 @@ from isaaclab.managers import (
 
 import cyclo_lab
 import os
+
+_LOCAL_PLUGINS.register_environments()
 
 from recorder_manager.recorder_manager import StreamingRecorderManager
 
@@ -372,7 +390,19 @@ def _recording_metadata(env_cfg, task_name: str, target_step_hz: float) -> dict:
         "target_side": str(getattr(env_cfg, "target_side", "")),
         "success_criterion_id": "manual_operator_acceptance",
         "dataset_origin": "isaaclab_hdf5_seed",
+        "recording_command": " ".join(sys.argv),
     }
+    try:
+        metadata["cyclo_lab_git_commit"] = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[4],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        metadata["cyclo_lab_git_commit"] = "unknown"
+    metadata.update(_LOCAL_PLUGINS.provenance())
 
     if args_cli.robot_type == "FFW_SG2":
         from cyclo_lab.robot_specs.ffw.sg2 import hdf5_contract_metadata
@@ -380,6 +410,27 @@ def _recording_metadata(env_cfg, task_name: str, target_step_hz: float) -> dict:
         metadata.update(hdf5_contract_metadata(env_cfg.actions))
 
     return metadata
+
+
+def _write_recording_manifest(dataset_file: str, metadata: dict) -> None:
+    dataset_path = Path(dataset_file).resolve()
+    if not dataset_path.is_file():
+        return
+    digest = hashlib.sha256()
+    with dataset_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    payload = dict(metadata)
+    payload.update(
+        {
+            "schema": "cyclo.local_recording_manifest.v1",
+            "dataset_file": dataset_path.name,
+            "dataset_sha256": digest.hexdigest(),
+        }
+    )
+    manifest_path = dataset_path.with_suffix(".manifest.json")
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    print(f"[Recording] Wrote provenance manifest: {manifest_path}")
 
 
 def _set_dataset_metadata(recorder_manager, metadata: dict) -> None:
@@ -442,9 +493,13 @@ def main():
     # create directory if it does not exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    task_recording_factory = _TASK_RECORDING_REGISTRY.build_recording_factory(
-        args_cli
-    )
+    built_in_factory = _TASK_RECORDING_REGISTRY.build_recording_factory(args_cli)
+    local_factory = _LOCAL_PLUGINS.build_recording_factory(args_cli)
+    if built_in_factory is not None and local_factory is not None:
+        raise ValueError(
+            f"Task {args_cli.task!r} selected both built-in and local recording controllers."
+        )
+    task_recording_factory = local_factory or built_in_factory
 
 
 
@@ -736,6 +791,7 @@ def main():
     release_camera_sensors_before_close(env)
     env.close()
     simulation_app.close()
+    _write_recording_manifest(args_cli.dataset_file, recording_metadata)
 
     if args_cli.render_episode_cameras:
         from pathlib import Path

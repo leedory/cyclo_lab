@@ -115,6 +115,24 @@ class PostureBiasedDifferentialInverseKinematicsAction(
         self.end_external_joint_position_hold()
 
 
+class InitialJointHoldDifferentialInverseKinematicsAction(
+    DifferentialInverseKinematicsAction
+):
+    """Keep the passive Mimic arm at its configured reset joint pose."""
+
+    def apply_actions(self):
+        self._asset.set_joint_position_target(
+            self._asset.data.default_joint_pos[:, self._joint_ids], self._joint_ids
+        )
+
+
+@configclass
+class InitialJointHoldDifferentialInverseKinematicsActionCfg(
+    DifferentialInverseKinematicsActionCfg
+):
+    class_type: type = InitialJointHoldDifferentialInverseKinematicsAction
+
+
 @configclass
 class PostureBiasedDifferentialInverseKinematicsActionCfg(
     DifferentialInverseKinematicsActionCfg
@@ -127,16 +145,28 @@ class PostureBiasedDifferentialInverseKinematicsActionCfg(
 
 
 def configure_ffw_sg2_mimic_ik_actions(
-    actions, posture_bias_sides: tuple[str, ...] = ()
+    actions,
+    posture_bias_sides: tuple[str, ...] = (),
+    *,
+    joint_hold_sides: tuple[str, ...] = (),
+    include_head: bool = True,
+    include_lift: bool = True,
+    eef_offset_z_m: float = -0.2,
 ) -> None:
-    """Configure the EEF19 prefix while preserving an existing base3 term.
+    """Configure dual-arm EEF control and optional passive platform joints.
 
-    Stationary tasks therefore remain 19D. Task525 already owns a
-    ``base_velocity`` action term, so it becomes EEF19 + base3 = 22D.
+    Existing stationary tasks remain EEF19 by default. Task525 already owns a
+    ``base_velocity`` action term, so its default becomes EEF19 + base3 = 22D.
+    Tasks whose public contract excludes head/lift can request EEF16 without
+    adding those action terms.
     """
+    if set(joint_hold_sides) & set(posture_bias_sides):
+        raise ValueError("An arm cannot use both joint hold and posture-biased IK")
     for side in ("l", "r"):
         action_cfg_type = (
-            PostureBiasedDifferentialInverseKinematicsActionCfg
+            InitialJointHoldDifferentialInverseKinematicsActionCfg
+            if side in joint_hold_sides
+            else PostureBiasedDifferentialInverseKinematicsActionCfg
             if side in posture_bias_sides
             else DifferentialInverseKinematicsActionCfg
         )
@@ -154,7 +184,7 @@ def configure_ffw_sg2_mimic_ik_actions(
                     use_relative_mode=False,
                 ),
                 body_offset=action_cfg_type.OffsetCfg(
-                    pos=[0.0, 0.0, -0.2]
+                    pos=[0.0, 0.0, eef_offset_z_m]
                 ),
             ),
         )
@@ -165,9 +195,11 @@ def configure_ffw_sg2_mimic_ik_actions(
     actions.gripper_r_action = make_ffw_sg2_joint_position_action_cfg(
         FFW_SG2_RIGHT_GRIPPER_JOINT_NAMES
     )
-    actions.head_action = make_ffw_sg2_joint_position_action_cfg(
-        FFW_SG2_HEAD_JOINT_NAMES
-    )
-    actions.lift_action = make_ffw_sg2_joint_position_action_cfg(
-        FFW_SG2_LIFT_JOINT_NAMES
-    )
+    if include_head:
+        actions.head_action = make_ffw_sg2_joint_position_action_cfg(
+            FFW_SG2_HEAD_JOINT_NAMES
+        )
+    if include_lift:
+        actions.lift_action = make_ffw_sg2_joint_position_action_cfg(
+            FFW_SG2_LIFT_JOINT_NAMES
+        )

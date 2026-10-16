@@ -51,36 +51,35 @@ def convert_joint_to_ik_omy(ep_data: EpisodeData) -> EpisodeData:
         raise ValueError(f"Failed to convert joint to IK for OMY: {str(e)}")
 
 def convert_joint_to_ik_ffw_sg2(ep_data: EpisodeData) -> EpisodeData:
-    """Convert joint19[/base3] actions to EEF19[/base3] Mimic actions."""
+    """Convert joint16/19[/base3] actions to matching SG2 EEF actions."""
     try:
         # FFW SG2 has dual arms, need to handle both left and right EEF states
         left_eef_pose = ep_data.data["obs"]["left_eef_pose"]
         right_eef_pose = ep_data.data["obs"]["right_eef_pose"]
         joint_actions = ep_data.data["actions"]
 
-        if joint_actions.ndim != 2 or joint_actions.shape[1] not in (19, 22):
+        if joint_actions.ndim != 2 or joint_actions.shape[1] not in (16, 19, 22):
             raise ValueError(
-                "FFW_SG2 actions must have shape [N, 19] or [N, 22], "
+                "FFW_SG2 actions must have shape [N, 16], [N, 19], or [N, 22], "
                 f"got {tuple(joint_actions.shape)}."
             )
 
-        # FFW SG2 joint action prefix (19D):
-        # [arm_l(7), gripper_l(1), arm_r(7), gripper_r(1), head(2), lift(1)]
+        # FFW SG2 joint action prefix is dual-arm16, optionally followed
+        # by head2/lift1 and then mobile base3.
         gripper_l_action = joint_actions[:, 7:8]  # Index 7: gripper_l_joint1
         gripper_r_action = joint_actions[:, 15:16]  # Index 15: gripper_r_joint1
-        head_action = joint_actions[:, 16:18]       # Indices 16-17: head joints
-        lift_action = joint_actions[:, 18:19]       # Index 18: lift joint
-
-        # IK action prefix (19D):
-        # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1), head(2), lift(1)]
+        # IK action prefix (16D):
+        # [left_eef(7), gripper_l(1), right_eef(7), gripper_r(1)]
         action_parts = [
-            left_eef_pose,    # 0-6: left EEF (pos + quat)
-            gripper_l_action,  # 7: left gripper
-            right_eef_pose,   # 8-14: right EEF (pos + quat)
-            gripper_r_action,  # 15: right gripper
-            head_action,       # 16-17: head joints
-            lift_action        # 18: lift joint
+            left_eef_pose,
+            gripper_l_action,
+            right_eef_pose,
+            gripper_r_action,
         ]
+        if joint_actions.shape[1] >= 19:
+            head_action = joint_actions[:, 16:18]
+            lift_action = joint_actions[:, 18:19]
+            action_parts.extend((head_action, lift_action))
         if joint_actions.shape[1] == 22:
             # Preserve the measured/generated mobile command without treating
             # it as part of an EEF pose.
@@ -106,23 +105,29 @@ def convert_ik_to_joint(ep_data: EpisodeData, robot_type: str | None = None) -> 
     try:
         joint_targets = ep_data.data["obs"]["joint_pos_target"]
         if robot_type == "FFW_SG2":
-            if joint_targets.ndim != 2 or joint_targets.shape[1] != 19:
+            if joint_targets.ndim != 2 or joint_targets.shape[1] not in (16, 19):
                 raise ValueError(
-                    "FFW_SG2 joint_pos_target must have shape [N, 19] before converting to joint actions. "
-                    f"Got {tuple(joint_targets.shape)}."
+                    "FFW_SG2 joint_pos_target must have shape [N, 16] or [N, 19] "
+                    f"before converting to joint actions. Got {tuple(joint_targets.shape)}."
                 )
             ik_actions = ep_data.data["actions"]
-            if ik_actions.ndim != 2 or ik_actions.shape[1] not in (19, 22):
+            if ik_actions.ndim != 2 or ik_actions.shape[1] not in (16, 19, 22):
                 raise ValueError(
-                    "FFW_SG2 IK actions must have shape [N, 19] or [N, 22], "
+                    "FFW_SG2 IK actions must have shape [N, 16], [N, 19], or [N, 22], "
                     f"got {tuple(ik_actions.shape)}."
                 )
             if ik_actions.shape[0] != joint_targets.shape[0]:
                 raise ValueError(
                     "FFW_SG2 actions and joint_pos_target must have the same number of steps."
                 )
-            # Observation and action tensors share the canonical 19D public
-            # prefix. Preserve the IK dataset's base3 tail for mobile tasks.
+            expected_joint_width = 16 if ik_actions.shape[1] == 16 else 19
+            if joint_targets.shape[1] != expected_joint_width:
+                raise ValueError(
+                    "FFW_SG2 IK and joint_pos_target public prefixes differ: "
+                    f"IK={ik_actions.shape[1]}D, joint={joint_targets.shape[1]}D."
+                )
+            # Preserve only the mobile base3 tail; fixed-platform Task000668
+            # remains joint16 and never gains head/lift/base fields.
             ep_data.data["actions"] = (
                 torch.cat((joint_targets, ik_actions[:, 19:22]), dim=1)
                 if ik_actions.shape[1] == 22
@@ -186,7 +191,10 @@ def process_dataset(
     _copy_hdf5_attributes(input_handler, output_handler)
 
     try:
-        episode_names = list(input_handler.get_episode_names())
+        episode_names = sorted(
+            input_handler.get_episode_names(),
+            key=lambda name: int(name.rsplit("_", 1)[-1]),
+        )
         if not episode_names:
             raise ValueError("Input dataset contains no episodes.")
         if robot_type == "FFW_SG2":

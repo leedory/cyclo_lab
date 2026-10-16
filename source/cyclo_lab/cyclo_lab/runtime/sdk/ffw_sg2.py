@@ -27,6 +27,7 @@ class FFWSG2Sdk(FFWSG2TopicBridge):
         keyboard_linear_speed: float = 0.10,
         keyboard_angular_speed: float = 0.25,
         active_trajectory_groups: Sequence[str] | None = None,
+        hold_reset_joint_targets: bool = False,
     ) -> None:
         if mode not in ("record", "inference"):
             raise ValueError(f"Unsupported FFW-SG2 SDK mode: {mode}")
@@ -48,6 +49,7 @@ class FFWSG2Sdk(FFWSG2TopicBridge):
             publish_odometry_tf=publish_odometry_tf,
             subscribe_reset=False,
             active_trajectory_groups=active_trajectory_groups,
+            hold_reset_joint_targets=hold_reset_joint_targets,
         )
 
         if enable_joystick_trigger:
@@ -145,7 +147,11 @@ class FFWSG2Sdk(FFWSG2TopicBridge):
         if self.mode != "record" or msg is None:
             return
         trigger = getattr(msg, "data", "")
-        if trigger == "right":
+        if trigger == "start":
+            self._start_recording()
+        elif trigger == "save":
+            self._save_episode()
+        elif trigger == "right":
             if self._episode_phase == "recording":
                 self._save_episode()
             else:
@@ -162,6 +168,9 @@ class FFWSG2Sdk(FFWSG2TopicBridge):
         if self._episode_phase == "recording":
             return
         print("[Control] Start recording requested.")
+        if self.hold_reset_joint_targets:
+            self.begin_control_activation()
+            self._leader_activation_requested.clear()
         self._started = True
         self._reset_state = False
         self._episode_phase = "recording"
@@ -197,6 +206,10 @@ class FFWSG2Sdk(FFWSG2TopicBridge):
             return {"reset": True}
         if self.mode == "inference" and not self._started:
             return None
+        if self.mode == "record" and self.hold_reset_joint_targets:
+            if not self._started:
+                return self.get_hold_action()
+            self._leader_activation_requested.clear()
         action = super().get_action()
         keyboard_command = self._keyboard_base_command()
         if keyboard_command is not None:

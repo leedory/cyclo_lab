@@ -388,6 +388,14 @@ def convert_isaaclab_to_lerobot(
     Convert an IsaacLab HDF5 dataset into LeRobot dataset format.
     """
     with h5py.File(dataset_file, "r") as source_hdf:
+        if is_task_hdf(source_hdf["data"], 100) or is_task_hdf(source_hdf["data"], 300):
+            raise RuntimeError(
+                "Task000100/Task000300 seed/MimicGen HDF5 omits camera frames. Convert MimicGen "
+                "actions to joint targets, render current WhiteRoom cameras with "
+                "tasks/task_000100/replay_visual_staging.py, then use "
+                "replay_staging_to_lerobot_v30.py. Direct HDF5 conversion would "
+                "not apply the current wall/table appearance."
+            )
         if is_task_hdf(source_hdf["data"], 458):
             raise RuntimeError(
                 "Task458 conversion is refused by the generic isaaclab2lerobot "

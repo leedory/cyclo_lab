@@ -26,6 +26,8 @@ FFW_SG2_MOBILE_ACTION_NAMES = (
     *FFW_SG2_ACTION_JOINT_NAMES,
     *FFW_SG2_BASE_ACTION_NAMES,
 )
+FFW_SG2_DUAL_ARM_ACTION_NAMES = FFW_SG2_ACTION_JOINT_NAMES[:16]
+FFW_SG2_DUAL_EEF_ACTION_NAMES = FFW_SG2_SDG_ACTION_NAMES[:16]
 
 FFW_SG2_JOINT_ACTION_UNITS = ("rad",) * 18 + ("m",)
 FFW_SG2_BASE_ACTION_UNITS = ("m/s", "m/s", "rad/s")
@@ -52,8 +54,11 @@ FFW_SG2_MOBILE_ACTION_UNITS = (
     *FFW_SG2_JOINT_ACTION_UNITS,
     *FFW_SG2_BASE_ACTION_UNITS,
 )
+FFW_SG2_DUAL_ARM_ACTION_UNITS = FFW_SG2_JOINT_ACTION_UNITS[:16]
+FFW_SG2_DUAL_EEF_ACTION_UNITS = FFW_SG2_SDG_ACTION_UNITS[:16]
 
 FFW_SG2_JOINT_ACTION_DIM = len(FFW_SG2_ACTION_JOINT_NAMES)
+FFW_SG2_DUAL_ARM_ACTION_DIM = len(FFW_SG2_DUAL_ARM_ACTION_NAMES)
 FFW_SG2_BASE_ACTION_DIM = len(FFW_SG2_BASE_ACTION_NAMES)
 FFW_SG2_MOBILE_ACTION_DIM = len(FFW_SG2_MOBILE_ACTION_NAMES)
 FFW_SG2_SDG_ACTION_DIM = len(FFW_SG2_SDG_ACTION_NAMES)
@@ -69,11 +74,28 @@ def converted_action_contract_metadata(
             "action_representation must be 'joint' or 'ik', "
             f"got {action_representation!r}"
         )
-    if action_dim not in (FFW_SG2_JOINT_ACTION_DIM, FFW_SG2_MOBILE_ACTION_DIM):
-        raise ValueError(f"SG2 converted actions must be 19D or 22D, got {action_dim}D")
+    if action_dim not in (
+        FFW_SG2_DUAL_ARM_ACTION_DIM,
+        FFW_SG2_JOINT_ACTION_DIM,
+        FFW_SG2_MOBILE_ACTION_DIM,
+    ):
+        raise ValueError(
+            f"SG2 converted actions must be 16D, 19D, or 22D, got {action_dim}D"
+        )
 
     mobile = action_dim == FFW_SG2_MOBILE_ACTION_DIM
     if action_representation == "joint":
+        if action_dim == FFW_SG2_DUAL_ARM_ACTION_DIM:
+            return {
+                "robot_contract_id": "ffw_sg2_rev1_dual_arm_16d_v1",
+                "action_names": list(FFW_SG2_DUAL_ARM_ACTION_NAMES),
+                "action_units": list(FFW_SG2_DUAL_ARM_ACTION_UNITS),
+                "action_semantics": (
+                    "pre_step_absolute_dual_arm_joint_position_command"
+                ),
+                "eef_action_frame": "none",
+                "mimic_trajectory_source": "none",
+            }
         return {
             "robot_contract_id": (
                 "ffw_sg2_rev1_mobile_22d_v1"
@@ -99,6 +121,16 @@ def converted_action_contract_metadata(
             "mimic_trajectory_source": "none",
         }
 
+    if action_dim == FFW_SG2_DUAL_ARM_ACTION_DIM:
+        return {
+            "robot_contract_id": "ffw_sg2_task000668_dual_eef16_v1",
+            "action_names": list(FFW_SG2_DUAL_EEF_ACTION_NAMES),
+            "action_units": list(FFW_SG2_DUAL_EEF_ACTION_UNITS),
+            "action_semantics": "observed_achieved_dual_eef_pose14_plus_grippers2",
+            "eef_action_frame": "robot_root",
+            "mimic_trajectory_source": "achieved_eef_pose",
+        }
+
     return {
         "robot_contract_id": (
             "ffw_sg2_task525_locomanipulation_sdg_eef22_v1"
@@ -122,6 +154,25 @@ def is_mobile_action_cfg(actions_cfg) -> bool:
     return getattr(actions_cfg, "base_action", None) is not None
 
 
+def is_dual_arm_only_action_cfg(actions_cfg) -> bool:
+    """Return whether head, lift, and base are absent from the action space."""
+
+    return (
+        all(
+            getattr(actions_cfg, term_name, None) is not None
+            for term_name in (
+                "arm_l_action",
+                "gripper_l_action",
+                "arm_r_action",
+                "gripper_r_action",
+            )
+        )
+        and not is_mobile_action_cfg(actions_cfg)
+        and getattr(actions_cfg, "head_action", None) is None
+        and getattr(actions_cfg, "lift_action", None) is None
+    )
+
+
 def sdg_ik_sides(actions_cfg) -> tuple[bool, bool]:
     """Return whether the left/right arm terms accept 7D EEF poses."""
 
@@ -143,9 +194,29 @@ def hdf5_contract_metadata(actions_cfg) -> dict[str, object]:
     """Build shape/name/unit/frame metadata from an environment action cfg."""
 
     mobile = is_mobile_action_cfg(actions_cfg)
+    dual_arm_only = is_dual_arm_only_action_cfg(actions_cfg)
     sdg_ik = is_sdg_ik_action_cfg(actions_cfg)
     ik_left, ik_right = sdg_ik_sides(actions_cfg)
-    if mobile and ik_left and ik_right:
+    if dual_arm_only and not sdg_ik:
+        action_names = state_names = FFW_SG2_DUAL_ARM_ACTION_NAMES
+        action_units = state_units = FFW_SG2_DUAL_ARM_ACTION_UNITS
+        contract_id = "ffw_sg2_rev1_dual_arm_16d_v1"
+        action_semantics = "pre_step_absolute_dual_arm_joint_position_command"
+        state_semantics = "measured_dual_arm_joint_position_16"
+    elif dual_arm_only and ik_left and ik_right:
+        action_names = FFW_SG2_DUAL_EEF_ACTION_NAMES
+        action_units = FFW_SG2_DUAL_EEF_ACTION_UNITS
+        state_names = FFW_SG2_DUAL_ARM_ACTION_NAMES
+        state_units = FFW_SG2_DUAL_ARM_ACTION_UNITS
+        contract_id = "ffw_sg2_task000668_dual_eef16_v1"
+        action_semantics = "pre_step_dual_eef_pose14_plus_grippers2"
+        state_semantics = "measured_dual_arm_joint_position_16"
+    elif dual_arm_only:
+        raise ValueError(
+            "Dual-arm-only SG2 SDG actions must configure both arms as EEF IK; "
+            f"got left={ik_left}, right={ik_right}"
+        )
+    elif mobile and ik_left and ik_right:
         action_names = FFW_SG2_SDG_ACTION_NAMES
         action_units = FFW_SG2_SDG_ACTION_UNITS
         state_names = FFW_SG2_MOBILE_ACTION_NAMES
@@ -181,7 +252,11 @@ def hdf5_contract_metadata(actions_cfg) -> dict[str, object]:
         "observation_state_units": list(state_units),
         "action_semantics": action_semantics,
         "observation_state_semantics": state_semantics,
-        "joint_order": "arm_l7,gripper_l,arm_r7,gripper_r,head2,lift",
+        "joint_order": (
+            "arm_l7,gripper_l,arm_r7,gripper_r"
+            if dual_arm_only
+            else "arm_l7,gripper_l,arm_r7,gripper_r,head2,lift"
+        ),
         "base_action_frame": "robot_body" if mobile else "none",
         "base_state_frame": "robot_body" if mobile else "none",
         "eef_action_frame": "robot_root" if sdg_ik else "none",

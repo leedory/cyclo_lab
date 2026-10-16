@@ -22,7 +22,7 @@ FFW_SG2_PUBLISHED_JOINT_NAMES = (
 # Isaac Lab actions use the same public order as ROS joint_states.
 FFW_SG2_ACTION_JOINT_NAMES = FFW_SG2_PUBLISHED_JOINT_NAMES
 
-# Physical position limits from the shipped SG2 articulation. Topic bridges use
+# Physical position limits from the SG2 follower URDF. Topic bridges use
 # this table as the final safety boundary for absolute joint targets.
 FFW_SG2_JOINT_POSITION_LIMITS = {
     "arm_l_joint1": (-3.14, 3.14),
@@ -41,7 +41,7 @@ FFW_SG2_JOINT_POSITION_LIMITS = {
     "arm_r_joint6": (-1.57, 1.57),
     "arm_r_joint7": (-1.5804, 1.8201),
     "gripper_r_joint1": (0.0, 1.1),
-    "head_joint1": (-0.2317, 0.6951),
+    "head_joint1": (-0.2317, 0.83),
     "head_joint2": (-0.35, 0.35),
     "lift_joint": (-0.5, 0.0),
 }

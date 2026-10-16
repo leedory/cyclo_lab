@@ -18,7 +18,7 @@ import re
 from copy import deepcopy
 
 from isaacsim.core.utils.stage import get_current_stage
-from pxr import Gf, Sdf, Usd, UsdPhysics
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
@@ -58,8 +58,9 @@ _SG2_WHEEL_PHYSICS_MATERIAL = RigidBodyMaterialCfg(
 _SG2_DISTAL_GRIPPER_PHYSICS_MATERIAL = RigidBodyMaterialCfg(
     friction_combine_mode="max",
     restitution_combine_mode="min",
-    static_friction=1.2,
-    dynamic_friction=1.0,
+    # High-grip rubber contact surface on the soft-gripper distal fingers.
+    static_friction=2.5,
+    dynamic_friction=2.25,
     restitution=0.0,
 )
 
@@ -78,6 +79,8 @@ _SG2_PHYSICS_LIFT_EFFORT_LIMIT = 5_000_000.0
 _SG2_PHYSICS_LIFT_STIFFNESS = 250_000.0
 _SG2_PHYSICS_LIFT_DAMPING = 5_000.0
 _SG2_BASE_CENTER_OF_MASS = (-0.07330104, 0.004389754, 0.05)
+_SG2_GRIPPER_VISUAL_GRAY = Gf.Vec3f(0.085, 0.085, 0.085)
+_SG2_GRIPPER_VISUAL_ROUGHNESS = 0.72
 
 
 def _iter_robot_prims(stage, prim_path: str):
@@ -246,6 +249,43 @@ def _apply_sg2_softgripper_physics(stage, prim_path: str) -> None:
     apply_ffw_softgripper_collision_defaults(stage, prim_path)
 
 
+def _apply_sg2_gripper_visual_material(stage, prim_path: str) -> None:
+    """Bind one shared dark-gray material to all SG2 gripper visual meshes."""
+
+    material_path = f"{prim_path}/Looks/SG2GripperDarkGray"
+    material = UsdShade.Material.Define(stage, material_path)
+    shader = UsdShade.Shader.Define(stage, f"{material_path}/Shader")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+        _SG2_GRIPPER_VISUAL_GRAY
+    )
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(
+        _SG2_GRIPPER_VISUAL_ROUGHNESS
+    )
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+    bound_paths = []
+    for child_prim in _iter_robot_prims(stage, prim_path):
+        child_path = str(child_prim.GetPath())
+        lower_path = child_path.lower()
+        if not child_prim.IsA(UsdGeom.Mesh):
+            continue
+        if "gripper" not in lower_path or "collision" in lower_path:
+            continue
+        UsdShade.MaterialBindingAPI.Apply(child_prim).Bind(
+            material, UsdShade.Tokens.strongerThanDescendants
+        )
+        bound_paths.append(child_path)
+
+    if not bound_paths:
+        raise RuntimeError(f"No SG2 gripper visual meshes found below {prim_path}.")
+    print(
+        "[SG2 gripper visual] bound dark-gray material to "
+        f"{len(bound_paths)} visual meshes."
+    )
+
+
 @clone
 def spawn_sg2_with_softgripper_physics(
     prim_path, cfg, translation=None, orientation=None, **kwargs
@@ -256,6 +296,7 @@ def spawn_sg2_with_softgripper_physics(
     stage = get_current_stage()
     make_uninstanceable(prim_path, stage)
     _apply_sg2_softgripper_physics(stage, prim_path)
+    _apply_sg2_gripper_visual_material(stage, prim_path)
     return prim
 
 
@@ -275,6 +316,7 @@ def spawn_sg2_with_base_physics(prim_path, cfg, translation=None, orientation=No
     _bind_sg2_wheel_physics_material(stage, prim_path, material_path)
 
     _apply_sg2_softgripper_physics(stage, prim_path)
+    _apply_sg2_gripper_visual_material(stage, prim_path)
 
     _filter_sg2_base_wheel_collisions(stage, prim_path)
     return prim
@@ -282,7 +324,7 @@ def spawn_sg2_with_base_physics(prim_path, cfg, translation=None, orientation=No
 
 FFW_SG2_CFG = ArticulationCfg(
     spawn=UsdFileCfg(
-        usd_path=f"{CYCLO_LAB_ASSETS_DATA_DIR}/robots/FFW/FFW_SG2.usd",
+        usd_path=f"{CYCLO_LAB_ASSETS_DATA_DIR}/robots/FFW/FFW_SG2_softgripper.usd",
         rigid_props=RigidBodyPropertiesCfg(
             disable_gravity=True,
             max_depenetration_velocity=5.0,
@@ -317,7 +359,7 @@ FFW_SG2_CFG = ArticulationCfg(
         # Actuator for vertical lift joint
         "lift": ImplicitActuatorCfg(
             joint_names_expr=["lift_joint"],
-            velocity_limit_sim=0.2,
+            velocity_limit_sim=0.05,
             effort_limit_sim=1_000_000.0,
             stiffness=10_000.0,
             damping=100.0,

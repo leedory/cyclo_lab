@@ -25,6 +25,8 @@ Script to add mimic annotations to demos to be used as source demos for mimic da
 
 import argparse
 import math
+from pathlib import Path
+import sys
 
 from isaaclab.app import AppLauncher
 
@@ -45,6 +47,21 @@ parser.add_argument(
 )
 parser.add_argument("--auto", action="store_true", default=False, help="Automatically annotate subtasks.")
 parser.add_argument(
+    "--task000100_joint_replay",
+    action="store_true",
+    help="Replay Task000100 joint commands, then export next-step EEF IK actions for MimicGen.",
+)
+parser.add_argument(
+    "--task000200_joint_replay",
+    action="store_true",
+    help="Replay Task000200 19D joint commands and export next-step EEF IK actions.",
+)
+parser.add_argument(
+    "--task000300_joint_replay",
+    action="store_true",
+    help="Replay Task000300 19D joint commands and export next-step EEF IK actions.",
+)
+parser.add_argument(
     "--enable_pinocchio",
     action="store_true",
     default=False,
@@ -61,7 +78,20 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
-
+_IMITATION_LEARNING_ROOT = Path(__file__).resolve().parents[1]
+if str(_IMITATION_LEARNING_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMITATION_LEARNING_ROOT))
+from local_plugins import load_for_task, task_name_from_hdf5  # noqa: E402
+_PLUGIN_TASK_NAME = args_cli.task or task_name_from_hdf5(args_cli.input_file)
+_LOCAL_PLUGINS = load_for_task(_PLUGIN_TASK_NAME)
+_LOCAL_PLUGINS.configure_launcher_args(args_cli)
+if sum((args_cli.task000100_joint_replay, args_cli.task000200_joint_replay, args_cli.task000300_joint_replay)) > 1:
+    parser.error("Select only one WhiteRoom joint replay task")
+joint_replay_mode = (
+    args_cli.task000100_joint_replay
+    or args_cli.task000200_joint_replay
+    or args_cli.task000300_joint_replay
+)
 if args_cli.enable_pinocchio:
     # Import pinocchio before AppLauncher to force the use of the version installed by IsaacLab and not the one installed by Isaac Sim
     # pinocchio is required by the Pink IK controllers and the GR1T2 retargeter
@@ -97,11 +127,32 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 import cyclo_lab  # noqa: F401
+_LOCAL_PLUGINS.register_environments()
 
 is_paused = False
 current_action_index = 0
 marked_subtask_action_indices = []
 skip_episode = False
+joint_replay_ik_actions = None
+
+
+def task000100_ik_actions_from_joint_episode(episode: EpisodeData) -> torch.Tensor:
+    """Pair each recorded joint command with the following observed EEF pose."""
+    actions = episode.data["actions"]
+    if actions.ndim != 2 or actions.shape[1] != 19:
+        raise ValueError(f"Task000100 joint replay requires 19D actions, got {tuple(actions.shape)}")
+    left_pose = episode.data["obs"]["left_eef_pose"]
+    right_pose = episode.data["obs"]["right_eef_pose"]
+    if left_pose.shape != right_pose.shape or left_pose.shape != (actions.shape[0], 7):
+        raise ValueError("Task000100 EEF observation shape does not match joint actions")
+    left_target = torch.cat((left_pose[1:], left_pose[-1:]), dim=0)
+    right_target = torch.cat((right_pose[1:], right_pose[-1:]), dim=0)
+    converted = torch.cat(
+        (left_target, actions[:, 7:8], right_target, actions[:, 15:19]), dim=1
+    )
+    if not bool(torch.isfinite(converted).all().item()):
+        raise ValueError("Task000100 IK action conversion produced nonfinite values")
+    return converted
 
 
 def play_cb():
@@ -133,10 +184,15 @@ class PreStepDatagenInfoRecorder(RecorderTerm):
         for eef_name in self._env.cfg.subtask_configs.keys():
             eef_pose_dict[eef_name] = self._env.get_robot_eef_pose(eef_name=eef_name)
 
+        target_action = self._env.action_manager.action
+        if joint_replay_mode:
+            if joint_replay_ik_actions is None:
+                raise RuntimeError("WhiteRoom IK targets were not set before joint replay")
+            target_action = joint_replay_ik_actions[current_action_index : current_action_index + 1]
         datagen_info = {
             "object_pose": self._env.get_object_poses(),
             "eef_pose": eef_pose_dict,
-            "target_eef_pose": self._env.action_to_target_eef_pose(self._env.action_manager.action),
+            "target_eef_pose": self._env.action_to_target_eef_pose(target_action),
         }
         return "obs/datagen_info", datagen_info
 
@@ -214,7 +270,39 @@ def main():
         raise ValueError("Task/env name was not specified nor found in the dataset.")
 
     env_cfg = parse_env_cfg(env_name, device=args_cli.device, num_envs=1)
-    env_cfg.init_action_cfg("mimic_ik")
+    if args_cli.task000100_joint_replay and str(getattr(env_cfg, "task_id", "")) != "000100":
+        raise ValueError("--task000100_joint_replay only supports Task000100")
+    if args_cli.task000200_joint_replay and str(getattr(env_cfg, "task_id", "")) != "000200":
+        raise ValueError("--task000200_joint_replay only supports Task000200")
+    if args_cli.task000300_joint_replay and str(getattr(env_cfg, "task_id", "")) != "000300":
+        raise ValueError("--task000300_joint_replay only supports Task000300")
+    env_cfg.init_action_cfg("record" if joint_replay_mode else "mimic_ik")
+    if str(getattr(env_cfg, "task_id", "")) in ("000100", "000200", "000300"):
+        from cyclo_lab.manager_based.manipulation.common.recording import configure_recording_rates
+
+        source_episodes = dataset_file_handler.get_episode_names()
+        source_rates = {
+            (
+                float(dataset_file_handler._hdf5_data_group[name].attrs["physics_hz"]),
+                float(dataset_file_handler._hdf5_data_group[name].attrs["camera_hz"]),
+            )
+            for name in source_episodes
+        }
+        if len(source_rates) != 1:
+            raise ValueError(f"Task000100 source episodes have inconsistent simulation rates: {source_rates}")
+        physics_hz, camera_hz = source_rates.pop()
+        control_hz, _, _ = configure_recording_rates(
+            env_cfg, physics_hz=physics_hz, camera_hz=camera_hz
+        )
+        print(
+            f"[WhiteRoom] Annotation replay rates: control={control_hz:g} Hz, "
+            f"physics={physics_hz:g} Hz, cameras={camera_hz:g} Hz",
+            flush=True,
+        )
+    from cyclo_lab.manager_based.manipulation.common.recording import disable_recorded_camera_observations
+
+    disabled_cameras = disable_recorded_camera_observations(env_cfg)
+    print(f"[MimicGen] Camera observations disabled in HDF5: {disabled_cameras}")
 
     env_cfg.env_name = env_name
 
@@ -309,9 +397,15 @@ def main():
         while simulation_app.is_running() and not simulation_app.is_exiting():
             # Iterate over the episodes in the loaded dataset file
             for episode_index, episode_name in enumerate(dataset_file_handler.get_episode_names()):
+                global joint_replay_ik_actions
                 processed_episode_count += 1
                 print(f"\nAnnotating episode #{episode_index} ({episode_name})")
                 episode = dataset_file_handler.load_episode(episode_name, env.device)
+                joint_replay_ik_actions = (
+                    task000100_ik_actions_from_joint_episode(episode)
+                    if joint_replay_mode
+                    else None
+                )
 
                 is_episode_annotated_successfully = False
                 if args_cli.auto:
@@ -322,6 +416,11 @@ def main():
                     )
 
                 if is_episode_annotated_successfully and not skip_episode:
+                    if joint_replay_mode:
+                        annotated_episode = env.recorder_manager.get_episode(0)
+                        annotated_episode.data["actions"] = joint_replay_ik_actions.clone()
+                        if "actions" in annotated_episode.data.get("obs", {}):
+                            annotated_episode.data["obs"]["actions"] = joint_replay_ik_actions.clone()
                     # set success to the recorded episode data and export to file
                     env.recorder_manager.set_success_to_episodes(
                         None, torch.tensor([[True]], dtype=torch.bool, device=env.device)
@@ -372,6 +471,7 @@ def replay_episode(
     # read initial state and actions from the loaded episode
     initial_state = episode.data["initial_state"]
     actions = episode.data["actions"]
+    replay_diag = []
     env.sim.reset()
     env.recorder_manager.reset()
     env.reset_to(initial_state, None, is_relative=True)
@@ -388,6 +488,23 @@ def replay_episode(
                 continue
         action_tensor = torch.Tensor(action).reshape([1, action.shape[0]])
         env.step(torch.Tensor(action_tensor))
+        if (args_cli.task000100_joint_replay or args_cli.task000300_joint_replay) and os.environ.get("CYCLO_TASK000100_REPLAY_DIAG") == "1":
+            source_index = min(action_index + 1, len(actions) - 1)
+            live_eef = env.obs_buf["policy"]["right_eef_pose"][0, :3]
+            source_eef = episode.data["obs"]["right_eef_pose"][source_index, :3]
+            live_block = env.scene["navy_block"].data.root_pos_w[0]
+            source_block = episode.data["states"]["rigid_object"]["navy_block"]["root_pose"][action_index, :3]
+            replay_diag.append((
+                action_index,
+                float(torch.linalg.vector_norm(live_eef - source_eef).item()),
+                float(torch.linalg.vector_norm(live_block - source_block).item()),
+                float(live_block[2].item()),
+                float(source_block[2].item()),
+            ))
+    if replay_diag:
+        peak_eef = max(replay_diag, key=lambda item: item[1])
+        peak_block = max(replay_diag, key=lambda item: item[2])
+        print(f"\tTask000100 replay tracking: peak_eef={peak_eef} peak_block={peak_block} final={replay_diag[-1]}", flush=True)
     if success_term is not None:
         if not bool(success_term.func(env, **success_term.params)[0]):
             return False
@@ -421,6 +538,25 @@ def annotate_episode_in_auto_mode(
         return False
     if not is_episode_annotated_successfully:
         print("\tThe final task was not completed.")
+        if str(getattr(env.cfg, "task_id", "")) in ("000100", "000300"):
+            from cyclo_lab.manager_based.manipulation.white_room.config.ffw_sg2.contact_failure import (
+                contact_failures,
+            )
+
+            table, basket = contact_failures(env)
+            delta = (
+                env.scene["navy_block"].data.root_pos_w[0]
+                - env.scene["white_basket"].data.root_pos_w[0]
+            )
+            print(
+                f"\tTask{env.cfg.task_id} replay diagnosis:"
+                f" table_contact={bool(table[0].item())}"
+                f" gripper_basket_contact={bool(basket[0].item())}"
+                f" block_basket_delta_m={delta.tolist()}"
+                f" table_peak_n={env._task000100_table_peak_force_n[0].item():.6g}"
+                f" basket_peak_n={env._task000100_basket_peak_force_n[0].item():.6g}",
+                flush=True,
+            )
     else:
         # check if all the subtask term signals are annotated
         annotated_episode = env.recorder_manager.get_episode(0)

@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import fields, is_dataclass
+from pathlib import Path
 import signal
+import sys
 import threading
 import time
 
@@ -77,6 +79,12 @@ parser.add_argument(
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+_IMITATION_LEARNING_ROOT = Path(__file__).resolve().parent / "imitation_learning"
+if str(_IMITATION_LEARNING_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMITATION_LEARNING_ROOT))
+from local_plugins import load_for_task  # noqa: E402
+_LOCAL_PLUGINS = load_for_task(args_cli.task)
+_LOCAL_PLUGINS.configure_launcher_args(args_cli)
 if args_cli.ui_session:
     if args_cli.bridge != "ffw_sg2":
         parser.error("--ui-session requires --bridge ffw_sg2.")
@@ -95,6 +103,7 @@ from isaaclab.sensors import CameraCfg
 from isaaclab_tasks.utils import parse_env_cfg
 
 import cyclo_lab  # noqa: F401 - registers Cyclo Gym tasks after AppLauncher
+_LOCAL_PLUGINS.register_environments()
 from cyclo_lab.runtime.simulation import SimulationSession
 
 
@@ -189,6 +198,14 @@ def _begin_bridge_control_activation(bridge) -> None:
         control_activation()
 
 
+def _latch_bridge_reset_targets(bridge) -> None:
+    if bridge is None:
+        return
+    latch = getattr(bridge, "latch_reset_joint_targets", None)
+    if callable(latch):
+        latch()
+
+
 def _configure_environment():
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     if not isinstance(env_cfg, ManagerBasedEnvCfg):
@@ -254,6 +271,7 @@ def _make_bridge(env_cfg, env, camera_hz: float):
             active_trajectory_groups=getattr(
                 env_cfg, "sim2real_active_trajectory_groups", None
             ),
+            hold_reset_joint_targets=getattr(env_cfg, "hold_reset_joint_targets", False),
         )
     if args_cli.bridge == "ffw_sh5":
         from cyclo_lab.runtime.bridges.sh5 import FFWSH5TopicBridge
@@ -348,11 +366,19 @@ def main() -> None:
         control_hz = _control_hz(env_cfg)
         camera_hz = _camera_publish_hz(env_cfg, control_hz) if args_cli.enable_cameras else 0.0
         bridge = _make_bridge(env_cfg, env, camera_hz)
+        _latch_bridge_reset_targets(bridge)
         zero_action = torch.zeros(
             (env.num_envs, env.action_manager.total_action_dim),
             device=env.device,
             dtype=torch.float32,
         )
+        configured_idle_action = getattr(env_cfg, "idle_action", None)
+        if configured_idle_action is not None:
+            if len(configured_idle_action) != env.action_manager.total_action_dim:
+                raise ValueError("Configured idle action does not match the environment action dimension.")
+            zero_action[:] = torch.as_tensor(
+                configured_idle_action, device=env.device, dtype=zero_action.dtype
+            )
         operator_view = _make_operator_view(env_cfg, env)
         if not args_cli.ui_session:
             from pynput.keyboard import Listener
@@ -384,7 +410,8 @@ def main() -> None:
                 "and remain active after reset."
             )
         elif bridge is None:
-            print("[Control] Zero-action mode; press R to reset the environment.")
+            mode = "Configured idle-action" if configured_idle_action is not None else "Zero-action"
+            print(f"[Control] {mode} mode; press R to reset the environment.")
         elif requires_activation:
             print("[Control] Press B to enable robot actions; press R to reset and stop actions.")
         else:
@@ -426,6 +453,7 @@ def main() -> None:
                     env.reset()
                     if bridge is not None:
                         bridge.reset()
+                        _latch_bridge_reset_targets(bridge)
                         if args_cli.ui_session:
                             _begin_bridge_control_activation(bridge)
                             control_enabled = True

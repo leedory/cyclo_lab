@@ -30,6 +30,7 @@ FFW_SG2_ARM_ENABLE_TOPICS = {
     "right": FFW_SG2_RIGHT_ARM_ENABLE_TOPIC,
 }
 FFW_SG2_JOYSTICK_TRIGGER_TOPIC = "/leader/joystick_controller/tact_trigger"
+FFW_SG2_FOOT_SWITCH_MIDDLE_PEDAL_TOPIC = "/leader/foot_switch/middle_pedal"
 FFW_SG2_CAMERA_TOPICS = {
     "cam_head": "/zed/zed_node/left/image_rect_color/compressed",
     "cam_wrist_left": "/camera_left/camera_left/color/image_rect_raw/compressed",

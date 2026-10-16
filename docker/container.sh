@@ -158,6 +158,9 @@ start_container() {
         echo "[INFO] X11 forwarding not available (no DISPLAY or xauth)"
     fi
 
+    # The sim2real SDK requires its own local router on port 7448.
+    docker compose -f docker-compose.yaml up -d sg2_sim_zenoh_router
+
     # Check if container is already running
     if [ -n "$(docker ps -q --filter "name=^cyclo_lab${DOCKER_NAME_SUFFIX}$")" ]; then
         echo "[INFO] Container is already running"

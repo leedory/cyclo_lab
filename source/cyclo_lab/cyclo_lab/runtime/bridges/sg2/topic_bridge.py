@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections.abc import Sequence
@@ -15,6 +16,7 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
     FFW_SG2_ARM_ENABLE_TOPICS,
     FFW_SG2_ACTION_TOPICS,
     FFW_SG2_CAMERA_TOPICS,
+    FFW_SG2_FOOT_SWITCH_MIDDLE_PEDAL_TOPIC,
     FFW_SG2_HEAD_JOINT_NAMES,
     FFW_SG2_JOINT_POSITION_LIMITS,
     FFW_SG2_LEFT_ARM_JOINT_NAMES,
@@ -32,6 +34,7 @@ from cyclo_lab.robot_specs.ffw.sg2 import (
 from cyclo_lab.runtime.publishers.articulation_state_publisher import ArticulationStatePublisher
 from cyclo_lab.runtime.publishers.camera_publishers import CompressedCameraPublishers
 from cyclo_lab.runtime.transport.ros2_zenoh import (
+    BOOL,
     EMPTY,
     JOINT_TRAJECTORY,
     TWIST,
@@ -44,7 +47,8 @@ from cyclo_lab.runtime.transport.ros2_zenoh import (
 
 
 DEFAULT_CMD_VEL_TIMEOUT_SECONDS = 0.1
-DEFAULT_ACTIVATION_BLEND_SECONDS = 0.5
+DEFAULT_ACTIVATION_BLEND_SECONDS = 20.0
+DEFAULT_CONTINUOUS_TRACKING_TIME_CONSTANT_SECONDS = 0.4
 TRAJECTORY_COMMAND_GROUPS = ("left_arm", "right_arm", "head", "lift")
 TRAJECTORY_COMMAND_JOINT_NAMES = {
     "left_arm": (*FFW_SG2_LEFT_ARM_JOINT_NAMES, *FFW_SG2_LEFT_GRIPPER_JOINT_NAMES),
@@ -58,6 +62,7 @@ class FFWSG2TopicBridge:
     """Translate SG2 command topics into Isaac Lab actions and publish simulation state."""
 
     requires_activation = True
+    hold_reset_joint_targets = False
 
     def __init__(
         self,
@@ -68,22 +73,29 @@ class FFWSG2TopicBridge:
         subscribe_reset: bool = False,
         cmd_vel_timeout: float = DEFAULT_CMD_VEL_TIMEOUT_SECONDS,
         active_trajectory_groups: Sequence[str] | None = None,
+        hold_reset_joint_targets: bool = False,
     ) -> None:
         self.env = env
         self.robot = env.scene["robot"]
         self.domain_id = ros_domain_id()
         self.publish_odometry_tf = publish_odometry_tf
         self.cmd_vel_timeout = float(cmd_vel_timeout)
-        self.joint_names = list(FFW_SG2_ACTION_JOINT_NAMES)
+        self.hold_reset_joint_targets = bool(hold_reset_joint_targets)
+        full_joint_names = list(FFW_SG2_ACTION_JOINT_NAMES)
         self.published_joint_names = list(FFW_SG2_PUBLISHED_JOINT_NAMES)
         self.total_action_dim = env.action_manager.total_action_dim
-        self.include_base_action = (
-            "base_action" in env.action_manager.active_terms
-            and self.total_action_dim == len(self.joint_names) + 3
-        )
-        if self.total_action_dim not in (len(self.joint_names), len(self.joint_names) + 3):
+        if self.total_action_dim == 16:
+            self.joint_names = full_joint_names[:16]
+            self.include_base_action = False
+        elif self.total_action_dim == len(full_joint_names):
+            self.joint_names = full_joint_names
+            self.include_base_action = False
+        elif self.total_action_dim == len(full_joint_names) + 3:
+            self.joint_names = full_joint_names
+            self.include_base_action = "base_action" in env.action_manager.active_terms
+        else:
             raise ValueError(
-                f"FFW-SG2 bridge expects 19D or 22D actions, got {self.total_action_dim}D."
+                f"FFW-SG2 bridge expects 16D, 19D, or 22D actions, got {self.total_action_dim}D."
             )
 
         requested_groups = (
@@ -118,11 +130,16 @@ class FFWSG2TopicBridge:
         # arrival count, this is an edge event and is safe for an explicit
         # task-local handoff after autonomous motion.
         self._arm_tact_generation = {"left": 0, "right": 0}
+        # ROS/Zenoh callbacks run outside the simulation loop. Defer reading
+        # articulation state and starting the blend until get_action().
+        self._leader_activation_requested = threading.Event()
         self._latest_cmd_vel = (0.0, 0.0, 0.0)
         self._last_cmd_vel_time = 0.0
         self._activation_blend_anchor: dict[str, float] | None = None
         self._activation_blend_start_time = 0.0
         self._activation_blend_duration = 0.0
+        self._smoothed_joint_targets: dict[str, float] | None = None
+        self._tracking_filter_last_time = 0.0
         self._closed = False
 
         self.subscribers = [
@@ -140,6 +157,13 @@ class FFWSG2TopicBridge:
                 callback=lambda msg, side=side: self._on_arm_enable(side, msg),
             )
             for side, topic in FFW_SG2_ARM_ENABLE_TOPICS.items()
+        )
+        self.subscribers.append(
+            create_subscriber(
+                topic=FFW_SG2_FOOT_SWITCH_MIDDLE_PEDAL_TOPIC,
+                msg_type=BOOL,
+                callback=self._on_middle_foot_switch,
+            )
         )
         self.arm_enable_publishers = {
             side: create_publisher(topic, UINT8)
@@ -231,6 +255,7 @@ class FFWSG2TopicBridge:
             return
         with self._lock:
             self._arm_tact_generation[side] += 1
+        self._leader_activation_requested.set()
 
     def arm_tact_generation(self, side: str) -> int:
         """Return the count of A3 tact presses observed for one arm."""
@@ -239,6 +264,12 @@ class FFWSG2TopicBridge:
             raise KeyError(f"Unknown FFW-SG2 arm side: {side}")
         with self._lock:
             return self._arm_tact_generation[side]
+
+    def _on_middle_foot_switch(self, msg) -> None:
+        """Start the leader blend on the middle-pedal press edge."""
+
+        if msg is not None and bool(getattr(msg, "data", False)):
+            self._leader_activation_requested.set()
 
     def left_arm_tact_generation(self) -> int:
         return self.arm_tact_generation("left")
@@ -301,9 +332,30 @@ class FFWSG2TopicBridge:
             if name in name_to_index
         }
 
+    def latch_reset_joint_targets(self) -> None:
+        """Keep this episode's reset targets as the inactive control command."""
+        if not self.hold_reset_joint_targets:
+            return
+        positions = self.robot.data.joint_pos_target[0].detach().cpu().tolist()
+        name_to_index = {name: index for index, name in enumerate(self.robot.data.joint_names)}
+        targets = {
+            name: self._clamp_joint(name, positions[name_to_index[name]])
+            for name in self.joint_names
+            if name in name_to_index
+        }
+        missing = set(self.joint_names) - set(targets)
+        if missing:
+            raise RuntimeError(f"SG2 reset targets missing joints: {sorted(missing)}")
+        with self._lock:
+            self._target_joint_state = targets
+            self._smoothed_joint_targets = dict(targets)
+            self._tracking_filter_last_time = time.monotonic()
+
     def _joint_targets(self) -> dict[str, float]:
         with self._lock:
             if self._target_joint_state is None:
+                if self.hold_reset_joint_targets:
+                    raise RuntimeError("SG2 reset targets were not latched before control")
                 self._target_joint_state = self._read_current_joint_state()
             for label in self.active_trajectory_groups:
                 command = self._trajectory_commands[label]
@@ -316,7 +368,8 @@ class FFWSG2TopicBridge:
 
             duration = self._activation_blend_duration
             elapsed = time.monotonic() - self._activation_blend_start_time
-            alpha = 1.0 if duration <= 0.0 else min(max(elapsed / duration, 0.0), 1.0)
+            t = 1.0 if duration <= 0.0 else min(max(elapsed / duration, 0.0), 1.0)
+            alpha = 6.0 * t**5 - 15.0 * t**4 + 10.0 * t**3
             if alpha >= 1.0:
                 self._activation_blend_anchor = None
                 return targets
@@ -345,16 +398,62 @@ class FFWSG2TopicBridge:
             values.extend(base_command)
         return torch.tensor(values, device=self.env.device, dtype=torch.float32).unsqueeze(0)
 
+    def _smooth_joint_targets(self, targets: dict[str, float]) -> dict[str, float]:
+        """Continuously low-pass all leader-controlled joint targets."""
+
+        now = time.monotonic()
+        with self._lock:
+            previous = self._smoothed_joint_targets
+            last_time = self._tracking_filter_last_time
+            if previous is None or last_time <= 0.0:
+                smoothed = dict(targets)
+            else:
+                elapsed = max(now - last_time, 0.0)
+                tau = DEFAULT_CONTINUOUS_TRACKING_TIME_CONSTANT_SECONDS
+                alpha = 1.0 if tau <= 0.0 else -math.expm1(-elapsed / tau)
+                smoothed = {
+                    name: previous.get(name, target) + alpha * (target - previous.get(name, target))
+                    for name, target in targets.items()
+                }
+            self._smoothed_joint_targets = smoothed
+            self._tracking_filter_last_time = now
+            return dict(smoothed)
+
     def get_action(self) -> torch.Tensor:
-        """Return the latest absolute joint targets and optional base velocity."""
-        return self._make_action(self._joint_targets(), self._current_cmd_vel())
+        """Return continuously smoothed joint targets and optional base velocity."""
+        if self._leader_activation_requested.is_set():
+            self._leader_activation_requested.clear()
+            self._begin_leader_activation_blend()
+        targets = self._smooth_joint_targets(self._joint_targets())
+        return self._make_action(targets, self._current_cmd_vel())
+
+    def _begin_leader_activation_blend(
+        self,
+        transition_seconds: float = DEFAULT_ACTIVATION_BLEND_SECONDS,
+    ) -> None:
+        """Blend from the measured pose after a tact or foot-pedal activation."""
+
+        if transition_seconds < 0.0:
+            raise ValueError("SG2 leader transition must be non-negative.")
+        current = self._read_current_joint_state()
+        now = time.monotonic()
+        with self._lock:
+            self._activation_blend_anchor = dict(current)
+            self._activation_blend_start_time = now
+            self._activation_blend_duration = float(transition_seconds)
+            self._smoothed_joint_targets = dict(current)
+            self._tracking_filter_last_time = now
 
     def get_hold_action(self) -> torch.Tensor:
-        """Hold the current joint pose and command zero base velocity."""
+        """Hold latched reset targets or the current pose with zero base velocity."""
         with self._lock:
             if self._target_joint_state is None:
+                if self.hold_reset_joint_targets:
+                    raise RuntimeError("SG2 reset targets were not latched before hold")
                 self._target_joint_state = self._read_current_joint_state()
             targets = dict(self._target_joint_state)
+            self._smoothed_joint_targets = dict(targets)
+            self._tracking_filter_last_time = time.monotonic()
         return self._make_action(targets, (0.0, 0.0, 0.0))
 
     def get_measured_joint_hold_action(self) -> torch.Tensor:
@@ -364,25 +463,37 @@ class FFWSG2TopicBridge:
         gripper to an older A3 command when ownership changes hands.
         """
 
-        return self._make_action(self._read_current_joint_state(), (0.0, 0.0, 0.0))
+        targets = self._read_current_joint_state()
+        with self._lock:
+            self._smoothed_joint_targets = dict(targets)
+            self._tracking_filter_last_time = time.monotonic()
+        return self._make_action(targets, (0.0, 0.0, 0.0))
 
     def begin_control_activation(
         self,
         transition_seconds: float = DEFAULT_ACTIVATION_BLEND_SECONDS,
     ) -> None:
-        """Blend from the settled simulated pose into the absolute live command.
+        """Enable live commands and blend them from the current reset/hold pose.
 
-        Leader topics are subscribed while control is inactive, so a cached
-        position can differ slightly from the settled simulated pose. Starting
-        from the current articulation state avoids an impulse when B enables
-        those cached absolute commands.
+        WhiteRoom discards cached arm commands and blends only commands received
+        after activation. Other SG2 tasks blend from the measured articulation pose.
         """
         if transition_seconds < 0.0:
             raise ValueError("SG2 activation transition must be non-negative.")
-        current = self._read_current_joint_state()
-        targets = dict(current)
-        blend_anchor = dict(current)
-        if len(self.active_trajectory_groups) != len(TRAJECTORY_COMMAND_GROUPS):
+        if self.hold_reset_joint_targets:
+            with self._lock:
+                if self._target_joint_state is None:
+                    raise RuntimeError("SG2 reset targets were not latched before activation")
+                targets = dict(self._target_joint_state)
+            blend_anchor = dict(targets)
+        else:
+            current = self._read_current_joint_state()
+            targets = dict(current)
+            blend_anchor = dict(current)
+        if (
+            not self.hold_reset_joint_targets
+            and len(self.active_trajectory_groups) != len(TRAJECTORY_COMMAND_GROUPS)
+        ):
             defaults = self._read_default_joint_state()
             inactive_groups = set(TRAJECTORY_COMMAND_GROUPS) - set(self.active_trajectory_groups)
             for label in inactive_groups:
@@ -394,9 +505,13 @@ class FFWSG2TopicBridge:
                         # from the activation blend keeps that command
                         # continuous across the ownership transition.
                         blend_anchor[name] = defaults[name]
+        now = time.monotonic()
         with self._lock:
             self._target_joint_state = targets
-            # Hold the measured pose until head/lift input changes from its pre-B value.
+            if self.hold_reset_joint_targets:
+                for label in ("left_arm", "right_arm"):
+                    self._trajectory_commands[label] = None
+            # Hold head/lift until input changes from its pre-B value.
             self._activation_blocked_commands.clear()
             for label in ("head", "lift"):
                 command = self._trajectory_commands[label]
@@ -404,8 +519,10 @@ class FFWSG2TopicBridge:
                     self._activation_blocked_commands[label] = dict(command)
                     self._trajectory_commands[label] = None
             self._activation_blend_anchor = blend_anchor
-            self._activation_blend_start_time = time.monotonic()
+            self._activation_blend_start_time = now
             self._activation_blend_duration = float(transition_seconds)
+            self._smoothed_joint_targets = dict(targets)
+            self._tracking_filter_last_time = now
 
     def publish_observations(self) -> bool:
         """Publish state and return whether a due camera batch succeeded."""
@@ -414,6 +531,7 @@ class FFWSG2TopicBridge:
         return self.camera_publishers.publish()
 
     def clear_command_cache(self) -> None:
+        self._leader_activation_requested.clear()
         with self._lock:
             self._target_joint_state = None
             for label in self._trajectory_commands:
@@ -427,6 +545,8 @@ class FFWSG2TopicBridge:
             self._activation_blend_anchor = None
             self._activation_blend_start_time = 0.0
             self._activation_blend_duration = 0.0
+            self._smoothed_joint_targets = None
+            self._tracking_filter_last_time = 0.0
         self.state_publisher.reset_odom_origin()
 
     def reset(self) -> None:

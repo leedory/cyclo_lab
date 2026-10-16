@@ -26,6 +26,9 @@ SUPPORTED_ACTION_SEMANTICS = frozenset(
     {
         "pre_step_raw_absolute_joint_position_command",
         "pre_step_joint_position_19_plus_body_velocity_3",
+        # Current Task000300 staging uses an explicit zero-body-velocity
+        # spelling for the same 19-joint action contract.
+        "pre_step_joint_position_19_plus_constant_zero_body_velocity_3",
         "pre_step_named_joint_position_plus_optional_body_velocity",
     }
 )
@@ -128,6 +131,31 @@ def verify_video(path: Path, expected_frames: int, expected_fps: int) -> dict[st
         "height": int(stream["height"]),
         "fps": fps,
         "sha256": sha256(path),
+        "validation": "full",
+    }
+
+
+def unchecked_video_metadata(
+    path: Path,
+    expected_frames: int,
+    expected_fps: int,
+    robot_type: str,
+    camera: str,
+) -> dict[str, Any]:
+    """Record expected metadata without decoding non-sampled videos."""
+
+    if not path.is_file():
+        raise ConversionError(f"missing video: {path}")
+    height, width = CAMERA_SHAPE_CONTRACTS[robot_type][camera]
+    return {
+        "path": str(path),
+        "codec": None,
+        "frames": expected_frames,
+        "width": width,
+        "height": height,
+        "fps": expected_fps,
+        "sha256": None,
+        "validation": "not_sampled",
     }
 
 
@@ -153,6 +181,73 @@ def validate_camera_shape(
         )
 
 
+def validate_vision_transform(
+    staging: Path, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate a producer supplied, task agnostic LUT contract."""
+
+    transform = payload.get("vision_transform")
+    if not isinstance(transform, dict):
+        raise ConversionError("vision_transform must be an object")
+    required_strings = (
+        "schema", "profile", "input_color_order", "output_color_order",
+        "interpolation", "application_stage",
+    )
+    missing = [
+        key for key in required_strings
+        if not isinstance(transform.get(key), str) or not transform[key]
+    ]
+    if missing:
+        raise ConversionError(f"vision LUT contract lacks fields: {missing}")
+    if not isinstance(transform.get("lut_size"), int) or transform["lut_size"] < 2:
+        raise ConversionError("vision LUT contract requires lut_size >= 2")
+
+    cameras = transform.get("cameras")
+    expected_cameras = set(payload.get("camera_map", {}).values())
+    if not isinstance(cameras, dict) or set(cameras) != expected_cameras:
+        raise ConversionError(
+            "vision LUT cameras do not match staging camera_map: "
+            f"got={sorted(cameras) if isinstance(cameras, dict) else cameras}, "
+            f"expected={sorted(expected_cameras)}"
+        )
+
+    root = staging.resolve()
+    for camera in sorted(expected_cameras):
+        item = cameras[camera]
+        expected_sha = item.get("sha256") if isinstance(item, dict) else None
+        if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+            raise ConversionError(f"vision LUT hash contract is invalid for {camera}")
+        relative = Path(str(item.get("path", "")))
+        if relative.is_absolute():
+            raise ConversionError(f"vision LUT path must be relative: {relative}")
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise ConversionError(f"vision LUT escapes staging: {relative}") from error
+        if not path.is_file() or sha256(path) != expected_sha:
+            raise ConversionError(f"missing or changed vision LUT for {camera}: {path}")
+    return transform
+
+
+def copy_vision_assets(
+    staging: Path, meta_dir: Path, transform: Mapping[str, Any]
+) -> dict[str, Any]:
+    result = json.loads(json.dumps(transform))
+    profile = str(result["profile"])
+    destination = meta_dir / "vision_tuning"
+    destination.mkdir(parents=True, exist_ok=True)
+    for camera, item in result["cameras"].items():
+        source = staging / str(item["path"])
+        suffix = source.suffix or ".npy"
+        target = destination / f"{camera}_{profile}{suffix}"
+        shutil.copy2(source, target)
+        if sha256(target) != item["sha256"]:
+            raise ConversionError(f"copied {profile} LUT hash mismatch for {camera}")
+        item["dataset_path"] = str(target.relative_to(meta_dir.parent))
+    return result
+
+
 def load_manifest(staging: Path, expected_episodes: int | None) -> dict[str, Any]:
     path = staging / "manifest.json"
     if not path.is_file():
@@ -169,6 +264,23 @@ def load_manifest(staging: Path, expected_episodes: int | None) -> dict[str, Any
     episodes = payload.get("episodes")
     if not isinstance(episodes, list) or not episodes:
         raise ConversionError("staging manifest contains no episodes")
+    if payload.get("vision_transform") is not None:
+        validate_vision_transform(staging, payload)
+    old_head = [
+        int(item.get("episode_index", index))
+        for index, item in enumerate(episodes)
+        if item.get("diagnostic_old_head_pose") is True
+    ]
+    if old_head:
+        raise ConversionError(
+            f"staging has incompatible head-pose diagnostic episodes {old_head}"
+        )
+    assets = payload.get("scene_assets")
+    if assets is not None and (
+        not isinstance(assets, dict)
+        or any(not isinstance(value, str) or len(value) != 64 for value in assets.values())
+    ):
+        raise ConversionError("scene_assets must contain SHA-256 strings")
     if payload.get("episode_count") != len(episodes):
         raise ConversionError("manifest episode_count does not match episode records")
     if expected_episodes is not None and len(episodes) != expected_episodes:
@@ -239,6 +351,7 @@ def write_dataset(
     *,
     state_names: Sequence[str] | None = None,
     action_names: Sequence[str] | None = None,
+    video_validation_sample_size: int | None = None,
 ) -> dict[str, Any]:
     staging = staging.resolve()
     output = output.resolve()
@@ -263,12 +376,30 @@ def write_dataset(
     except ImportError as error:
         raise ConversionError(f"Cyclo Intelligence v3 writer import failed: {error}") from error
 
+    records = manifest["episodes"]
+    if video_validation_sample_size is None or video_validation_sample_size >= len(records):
+        validation_indices = set(range(len(records)))
+    elif video_validation_sample_size <= 0:
+        raise ConversionError("video validation sample size must be positive")
+    elif video_validation_sample_size == 1:
+        validation_indices = {0}
+    else:
+        validation_indices = {
+            round(index * (len(records) - 1) / (video_validation_sample_size - 1))
+            for index in range(video_validation_sample_size)
+        }
+    print(
+        "VIDEO_VALIDATION_SAMPLE="
+        + json.dumps(sorted(validation_indices)),
+        flush=True,
+    )
+
     episodes = []
     input_video_checks = []
     policy_video_checks = []
     state_names_reference = None
     action_names_reference = None
-    for record in manifest["episodes"]:
+    for record_index, record in enumerate(records):
         (
             state,
             action,
@@ -298,7 +429,16 @@ def write_dataset(
                     f"episode {record['episode_index']} is missing camera {camera}"
                 )
             video_path = staging / str(record["videos"][camera])
-            input_check = verify_video(video_path, len(timestamp), fps)
+            if record_index in validation_indices:
+                input_check = verify_video(video_path, len(timestamp), fps)
+            else:
+                input_check = unchecked_video_metadata(
+                    video_path,
+                    len(timestamp),
+                    fps,
+                    robot_type,
+                    camera,
+                )
             input_checks[camera] = input_check
             validate_camera_shape(
                 robot_type,
@@ -339,6 +479,12 @@ def write_dataset(
                 action_names=episode_action_names,
             )
         )
+        if record_index in validation_indices:
+            print(
+                f"VIDEO_VALIDATION_OK episode={record['episode_index']} "
+                f"cameras={len(cameras)} frames={len(timestamp)}",
+                flush=True,
+            )
 
     config = V30ConversionConfig(
         repo_id=repo_id,
@@ -358,6 +504,14 @@ def write_dataset(
     if not writer.write_from_episodes(episodes):
         raise ConversionError("Cyclo Intelligence write_from_episodes returned false")
 
+    meta_dir = output / "meta"
+    vision_transform = manifest.get("vision_transform")
+    if vision_transform is not None:
+        vision_transform = copy_vision_assets(
+            staging,
+            meta_dir,
+            validate_vision_transform(staging, manifest),
+        )
     provenance = {
         "schema": "cyclo.isaac_action_replay_lerobot_v30_provenance.v1",
         "repo_id": repo_id,
@@ -372,7 +526,10 @@ def write_dataset(
         "randomization_profile": manifest["randomization_profile"],
         "action_semantics": manifest["action_semantics"],
         "observation_semantics": manifest["observation_semantics"],
+        "mobile_tail": manifest.get("mobile_tail"),
         "render_contract": manifest["render_contract"],
+        "scene_assets": manifest.get("scene_assets"),
+        "vision_transform": vision_transform,
         "physical_runtime_rate_provenance": manifest.get(
             "physical_runtime_rate_provenance"
         ),
@@ -394,6 +551,7 @@ def write_dataset(
         "source_staging_manifest_sha256": sha256(staging / "manifest.json"),
         "input_video_checks": input_video_checks,
         "policy_video_checks": policy_video_checks,
+        "video_validation_sample_indices": sorted(validation_indices),
         "camera_shape_contract_h_w": {
             camera: {
                 "height": int(size[0]), "width": int(size[1])
@@ -403,7 +561,6 @@ def write_dataset(
         },
         "episodes": manifest["episodes"],
     }
-    meta_dir = output / "meta"
     (meta_dir / SIDECAR_NAME).write_text(
         json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
     )
@@ -432,6 +589,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-id", required=True)
     parser.add_argument("--robot-type", default="ffw_sg2_rev1")
     parser.add_argument("--expected-episodes", type=int)
+    parser.add_argument(
+        "--video-validation-sample-size",
+        type=int,
+        help="Fully decode an evenly spaced sample; check existence only for the rest",
+    )
     parser.add_argument(
         "--state-names",
         nargs="+",
@@ -462,6 +624,7 @@ def main() -> int:
         args.expected_episodes,
         state_names=args.state_names,
         action_names=args.action_names,
+        video_validation_sample_size=args.video_validation_sample_size,
     )
     print("LEROBOT_V30=" + json.dumps(result, sort_keys=True), flush=True)
     return 0
