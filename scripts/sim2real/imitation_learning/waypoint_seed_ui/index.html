@@ -1,0 +1,1072 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SG2 Joint Waypoint Seed</title>
+  <style>
+    :root {
+      --page-bg: #eef2f7;
+      --section-bg: #f8fafc;
+      --block-bg: #ffffff;
+      --outline: #d8e0ea;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #111827;
+      background: var(--page-bg);
+      font-size: 14px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    .main { width: min(1500px, 100%); margin: 0 auto; padding: 30px clamp(18px, 3vw, 46px) 54px; }
+    .eyebrow { color: #2563eb; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    h1 { margin: 6px 0 8px; font-size: clamp(25px, 2.5vw, 34px); line-height: 1.18; letter-spacing: -.04em; }
+    p { margin: 8px 0; color: #64748b; line-height: 1.55; }
+    .page-head p { max-width: 660px; }
+    .badge { display: inline-flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid #cbd5e1; border-radius: 999px; color: #475569; background: white; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; }
+    .badge.live { color: #047857; border-color: #a7f3d0; background: #ecfdf5; }
+    .badge.live::before { background: #10b981; }
+    .panel, .point { border: 1px solid var(--outline); border-radius: 12px; box-shadow: 0 1px 2px #0f172a08; }
+    .panel { padding: 20px; margin-bottom: 18px; min-width: 0; background: var(--section-bg); }
+    .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 13px; margin-bottom: 15px; border-bottom: 1px solid var(--outline); }
+    details.panel > summary.panel-head { cursor: pointer; list-style: none; }
+    details.panel > summary.panel-head::-webkit-details-marker { display: none; }
+    details.panel > summary.panel-head small { margin-left: auto; }
+    details.panel > summary.panel-head::after { content: "⌄"; color: #64748b; font-size: 18px; line-height: 1; transform: rotate(-90deg); }
+    details.panel[open] > summary.panel-head::after { transform: rotate(0); }
+    details.panel:not([open]) > summary.panel-head { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+    .panel h2 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+    .panel-head small { white-space: nowrap; }
+    .workspace { display: grid; grid-template-columns: minmax(400px, 1.1fr) minmax(350px, .9fr); gap: 18px; align-items: start; }
+    .column { min-width: 0; }
+    .controls, .joint-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 13px; }
+    .setup-grid { grid-template-columns: minmax(260px, 2fr) minmax(145px, .7fr); }
+    .tcp-controls { display: grid; grid-template-columns: minmax(150px, 1.5fr) 72px repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
+    .tcp-controls label { min-width: 0; }
+    .tcp-controls input, .tcp-controls select { min-width: 0; padding: 8px 7px; font-size: 12px; }
+    .tcp-description { margin: 5px 0 10px; font-size: 9px; line-height: 1.4; }
+    .object-editor { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--outline); }
+    .object-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .object-controls input { min-width: 0; padding: 7px; font-size: 11px; }
+    #object-status { align-self: center; color: #64748b; font-size: 10px; }
+    #object-status:empty { display: none; }
+    label { display: block; color: #334155; font-size: 12px; font-weight: 650; }
+    input, select { width: 100%; margin-top: 7px; padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 8px; outline: none; background: white; color: #0f172a; font: inherit; }
+    input:focus, select:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px #dbeafe; }
+    input[type=number], .joint-value, .metric-value, #ik-result { font-variant-numeric: tabular-nums; }
+    .group { margin-top: 10px; border: 1px solid var(--outline); border-radius: 10px; background: var(--block-bg); overflow: hidden; }
+    .group summary { display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; color: #475569; cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .04em; list-style: none; }
+    .group summary::-webkit-details-marker { display: none; }
+    .group summary::after { content: "⌄"; color: #64748b; font-size: 16px; line-height: 1; transform: rotate(-90deg); }
+    .group[open] summary { border-bottom: 1px solid var(--outline); background: var(--section-bg); }
+    .group[open] summary::after { transform: rotate(0); }
+    .group .joint-grid { padding: 10px; }
+    .joint-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px 9px; }
+    .joint-grid label { min-width: 0; font-size: 9px; color: #64748b; overflow-wrap: anywhere; }
+    .joint-grid input { min-width: 0; margin-top: 3px; padding: 5px 6px; font-size: 10px; }
+    .initial-value { display: block; width: 100%; min-height: 26px; margin-top: 3px; padding: 5px 6px; border: 1px solid #dbe3ed; border-radius: 8px; background: #f8fafc; color: #0f172a; font-size: 10px; font-weight: 700; white-space: nowrap; }
+    .buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+    .setup-actions { align-items: center; }
+    #connection-status { align-self: center; color: #64748b; font-size: 11px; }
+    button { border: 0; border-radius: 8px; padding: 9px 13px; background: #2563eb; color: white; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
+    button:hover { background: #1d4ed8; }
+    button.secondary { background: #eff6ff; color: #1d4ed8; }
+    button.secondary:hover { background: #dbeafe; }
+    button.delete { background: #fff1f2; color: #be123c; }
+    button.delete:hover { background: #ffe4e6; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .point { margin-top: 10px; padding: 0; overflow: hidden; background: var(--block-bg); }
+    .point header { display: grid; grid-template-columns: 18px minmax(76px, 1fr) minmax(75px, 100px) auto auto auto; align-items: center; gap: 4px; padding: 8px; }
+    .point header .point-enabled { width: 16px; height: 16px; margin: 0; }
+    .point.disabled-point { opacity: .62; }
+    .point header .move-point { padding: 5px 7px; }
+    .point.open header { border-bottom: 1px solid var(--outline); background: var(--section-bg); }
+    .point-toggle { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 4px; background: transparent; color: #0f172a; text-align: left; }
+    .point-toggle:hover { background: transparent; color: #1d4ed8; }
+    .point-toggle::after { content: "⌄"; color: #64748b; font-size: 18px; line-height: 1; transform: rotate(-90deg); }
+    .point.open .point-toggle::after { transform: rotate(0); }
+    .point-title { font-size: 12px; font-weight: 750; }
+    .point-summary { color: #64748b; font-size: 10px; font-weight: 500; white-space: nowrap; }
+    .point-memo { width: 100%; min-width: 0; margin: 0; padding: 6px 7px; font-size: 10px; }
+    .point header .delete { flex: none; padding: 6px 10px; }
+    .point-body { padding: 13px; }
+    .point-body > label { font-size: 11px; }
+    .point-body[hidden] { display: none; }
+    .point-timing { display: grid; grid-template-columns: minmax(145px, 180px) minmax(0, 1fr); gap: 10px; align-items: end; }
+    .point-speed { min-height: 35px; padding: 7px 9px; border: 1px solid var(--outline); border-radius: 8px; background: var(--section-bg); color: #475569; font-size: 10px; line-height: 1.45; font-variant-numeric: tabular-nums; }
+    .plan-picker { margin-top: 16px; padding: 12px; border: 1px solid var(--outline); border-radius: 10px; background: var(--block-bg); }
+    #rate-warning { display: block; min-height: 15px; margin-top: 5px; color: #1d4ed8; font-size: 10px; font-weight: 500; }
+    #rate-warning.error { color: #be123c; }
+    .seed-export { margin-top: 12px; padding: 12px; border: 1px solid var(--outline); border-radius: 10px; background: var(--block-bg); }
+    .seed-export-row, .plan-save-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+    .seed-export-row button, .plan-save-row button { min-height: 35px; }
+    #seed-path, #plan-path { display: block; margin-top: 7px; color: #94a3b8; font-size: 9px; overflow-wrap: anywhere; }
+    .progress-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-top: 9px; }
+    .progress-row[hidden] { display: none; }
+    .progress-track { height: 6px; overflow: hidden; border-radius: 999px; background: #e2e8f0; }
+    #export-progress-fill { width: 0; height: 100%; border-radius: inherit; background: #2563eb; transition: width .2s ease; }
+    #export-progress-label { min-width: 34px; color: #64748b; font-size: 10px; text-align: right; }
+    #recording-status:empty { display: none; }
+    .joint-grid input.invalid { border-color: #e11d48; background: #fff1f2; }
+    .range { display: block; margin-top: 2px; color: #94a3b8; font-size: 8px; font-weight: 400; }
+    .position-list { margin-top: 10px; }
+    .position-row { display: grid; grid-template-columns: minmax(145px, .55fr) minmax(0, 1fr); gap: 12px; align-items: baseline; padding: 8px 2px; border-bottom: 1px solid var(--outline); }
+    .position-row:last-child { border-bottom: 0; }
+    .position-row strong { color: #64748b; font-size: 11px; font-weight: 800; }
+    .position-value { color: #0f172a; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .camera-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .camera-card { overflow: hidden; border: 1px solid var(--outline); border-radius: 9px; background: var(--block-bg); }
+    .camera-card strong { display: block; padding: 9px 11px; font-size: 11px; color: #475569; }
+    .camera-card img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #0f172a; }
+    .camera-card img[hidden] { display: none; }
+    .camera-card p { margin: 0; padding: 32px 8px; text-align: center; font-size: 11px; }
+    .camera-card p[hidden] { display: none; }
+    .viewer-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: end; }
+    #seed-video { display: block; width: 100%; margin-top: 12px; border-radius: 9px; background: #0f172a; }
+    #seed-video[hidden] { display: none; }
+    #ik-result { white-space: pre-wrap; overflow-wrap: anywhere; padding: 9px 10px; border: 1px solid var(--outline); border-radius: 8px; background: var(--block-bg); font-size: 10px; line-height: 1.55; }
+    #ik-result:empty { display: none; }
+    #status { white-space: pre-wrap; padding: 11px 13px; border-radius: 8px; min-height: 38px; }
+    #status.ok { color: #047857; background: #ecfdf5; }
+    #status.error { color: #be123c; background: #fff1f2; }
+    small, .hint { color: #94a3b8; font-size: 11px; font-weight: 400; line-height: 1.5; }
+    .hint { display: block; margin-top: 10px; }
+    @media (max-width: 1150px) { .workspace { grid-template-columns: 1fr; } }
+    @media (max-width: 900px) { .camera-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 700px) { .page-head { display: block; } .setup-grid, .metric-grid, .viewer-controls, .seed-export-row, .plan-save-row, .point-timing { grid-template-columns: 1fr; } .tcp-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); } .joint-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .main { padding: 22px 14px; } .point header { grid-template-columns: minmax(0, 1fr) auto; } .point-memo { grid-row: 2; width: 150px; } }
+    @media (max-width: 550px) { .camera-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="main">
+      <header class="page-head">
+        <div><span class="eyebrow">SG2 / Isaac Sim</span><h1>Joint Waypoint Seed</h1></div>
+        <span id="runtime-badge" class="badge">Preview Idle</span>
+      </header>
+      <section class="panel" id="setup">
+        <div class="panel-head"><h2>Setup</h2><small>Existing env · robot</small></div>
+        <div class="controls setup-grid">
+          <label>Environment<select id="environment"></select></label>
+          <label>Control Rate (Hz)<input id="rate" type="number" min="1" max="120" step="1" value="60"><span id="rate-warning"></span></label>
+        </div>
+        <div class="buttons setup-actions"><button id="connect-env" type="button">Connect</button><button id="disconnect-env" type="button" class="delete" disabled>Disconnect</button><span id="connection-status">Checking connection…</span></div>
+      </section>
+      <div class="workspace">
+        <div class="column">
+          <details class="panel" id="initial" open>
+            <summary class="panel-head"><h2>Initial Pose</h2><small>Measured after env reset</small></summary>
+            <div id="initial-joints"></div>
+          </details>
+          <section class="panel" id="waypoints">
+            <div class="panel-head"><h2>Waypoints</h2><small>60 Hz joint interpolation</small></div>
+            <div id="points"></div>
+            <div class="buttons"><button id="add" type="button" class="secondary">+ Point / Hold</button><button id="reset-init" type="button" class="secondary">Reset to Init</button><button id="preview-motion" type="button">Preview Motion</button></div>
+            <div class="plan-picker"><div class="plan-save-row"><label>Save Waypoints<input id="plan-filename" type="text" maxlength="80" placeholder="e.g. task000300_waypoints"></label><button id="save" type="button">Save</button></div><small id="plan-path">Save to: /home/robotis-ai/cyclo_lab/.runtime/joint_waypoint_seed_ui/plans/&lt;filename&gt;.json</small></div>
+            <div class="plan-picker"><label>Saved Waypoints<select id="saved-plans"><option value="">Select saved waypoints</option></select></label><div class="buttons"><button id="load-plan" type="button" class="secondary">Load</button><button id="refresh-plans" type="button" class="secondary">Refresh</button></div></div>
+            <div class="seed-export">
+              <div class="seed-export-row"><label>Seed Export<input id="seed-folder" type="text" maxlength="80" placeholder="e.g. task000300_seed"></label><button id="accept-hdf5" type="button">Export</button></div>
+              <small id="seed-path">Save to: /home/robotis-ai/cyclo_lab/datasets/waypoint_seed/&lt;folder&gt;</small>
+              <div class="progress-row" id="export-progress" hidden><div class="progress-track"><div id="export-progress-fill"></div></div><span id="export-progress-label">0%</span></div>
+              <span class="hint" id="recording-status"></span>
+            </div>
+            <p id="status" role="status"></p>
+          </section>
+        </div>
+        <div class="column">
+          <section class="panel" id="monitor">
+            <div class="panel-head"><h2>Live Position</h2><small>World XYZ · m</small></div>
+            <p id="pose-status">Waiting for the selected Isaac environment.</p>
+            <div class="position-list">
+              <div class="position-row"><strong>LEFT TCP:</strong><span class="position-value" id="left-tcp">—</span></div>
+              <div class="position-row"><strong>RIGHT TCP:</strong><span class="position-value" id="right-tcp">—</span></div>
+              <div class="position-row"><strong id="object-label">OBJECT CENTER:</strong><span class="position-value" id="object-center">—</span></div>
+              <div class="position-row"><strong>TRAY CENTER:</strong><span class="position-value" id="tray-center">—</span></div>
+            </div>
+            <div class="object-editor">
+              <div class="object-controls">
+                <label>X (m)<input id="object-x" type="number" step="any"></label>
+                <label>Y (m)<input id="object-y" type="number" step="any"></label>
+                <label>Z (m)<input id="object-z" type="number" step="any"></label>
+              </div>
+              <div class="buttons"><button id="object-current" type="button" class="secondary">Use Current</button><button id="object-apply" type="button">Apply</button><span id="object-status"></span></div>
+            </div>
+          </section>
+          <section class="panel" id="ik">
+            <div class="panel-head"><h2>TCP Target</h2><small>World XYZ · m</small></div>
+            <p class="tcp-description" id="ik-description">Iterative LM repeatedly updates FK and the Jacobian while keeping the current TCP orientation.</p>
+            <div class="tcp-controls">
+              <label>Method<select id="ik-solver"><option value="iterative_lm" selected>Iterative LM (Recommended)</option><option value="posture_lm">Posture-biased LM</option><option value="constrained_qp">Constrained QP</option><option value="local_dls">Local DLS (Legacy)</option></select></label>
+              <label>Arm<select id="ik-side"><option value="left">Left</option><option value="right">Right</option></select></label>
+              <label>X (m)<input id="ik-x" type="number" step="any"></label>
+              <label>Y (m)<input id="ik-y" type="number" step="any"></label>
+              <label>Z (m)<input id="ik-z" type="number" step="any"></label>
+            </div>
+            <div class="buttons"><button id="ik-current" type="button" class="secondary">Use Current TCP</button><button id="ik-solve" type="button">Calculate Joints</button><button id="ik-add" type="button" class="secondary" disabled>Add as Point</button></div>
+            <p id="ik-status" role="status"></p>
+            <pre id="ik-result"></pre>
+          </section>
+          <section class="panel" id="seed-viewer">
+            <div class="panel-head"><h2>Saved Seed Viewer</h2><small>HDF5 camera playback</small></div>
+            <div class="viewer-controls">
+              <label>Saved Seed<select id="saved-seeds"><option value="">Select a saved seed</option></select></label>
+              <button id="view-seed" type="button">View</button>
+              <button id="refresh-seeds" type="button" class="secondary">Refresh</button>
+            </div>
+            <span class="hint" id="viewer-status">Renders and plays Head / Left wrist / Right wrist cameras from a saved HDF5.</span>
+            <video id="seed-video" controls preload="metadata" hidden></video>
+          </section>
+        </div>
+      </div>
+      <section class="panel" id="cameras">
+        <div class="panel-head"><h2>Camera Preview</h2></div>
+        <div class="camera-grid">
+          <div class="camera-card"><strong>Operator Left</strong><img id="camera-overhead_left" alt="Original operator left view" hidden><p id="camera-overhead_left-empty">Waiting</p></div>
+          <div class="camera-card"><strong>Operator Top</strong><img id="camera-overhead_center" alt="Original operator top view" hidden><p id="camera-overhead_center-empty">Waiting</p></div>
+          <div class="camera-card"><strong>Operator Right</strong><img id="camera-overhead_right" alt="Original operator right view" hidden><p id="camera-overhead_right-empty">Waiting</p></div>
+          <div class="camera-card"><strong>Left wrist</strong><img id="camera-wrist_left" alt="Left wrist camera view" hidden><p id="camera-wrist_left-empty">Waiting</p></div>
+          <div class="camera-card"><strong>Head</strong><img id="camera-head" alt="Head camera view" hidden><p id="camera-head-empty">Waiting</p></div>
+          <div class="camera-card"><strong>Right wrist</strong><img id="camera-wrist_right" alt="Right wrist camera view" hidden><p id="camera-wrist_right-empty">Waiting</p></div>
+        </div>
+      </section>
+  </main>
+  <script>
+    let catalog;
+    let latestState;
+    let latestIkResult;
+    const ikDescriptions = {
+      iterative_lm: "Iterative LM repeatedly updates FK and the Jacobian while keeping the current TCP orientation.",
+      posture_lm: "Posture-biased LM also prefers joints near the currently measured arm posture to reduce unnecessary joint motion.",
+      constrained_qp: "Constrained QP enforces joint-step and URDF-limit bounds at every iteration and prefers posture continuity.",
+      local_dls: "Legacy Local DLS applies one current-pose Jacobian update. Use it mainly for comparison or very small moves."
+    };
+    let exportStarting = false;
+    let lastSavedDataset = "";
+    let objectPositionDirty = false;
+    let viewerGeneration = 0;
+    const groups = [
+      ["Left Arm", /^arm_l_|^gripper_l_/],
+      ["Right Arm", /^arm_r_|^gripper_r_/],
+      ["Other", /^head_|^lift_/]
+    ];
+    const points = document.querySelector("#points");
+    const status = document.querySelector("#status");
+    let pointId = 0;
+    function message(text, error = false) {
+      status.textContent = text;
+      status.className = error ? "error" : "ok";
+    }
+    function setExportProgress(percent, label) {
+      const value = Math.max(0, Math.min(100, Math.round(percent)));
+      document.querySelector("#export-progress").hidden = false;
+      document.querySelector("#export-progress-fill").style.width = `${value}%`;
+      document.querySelector("#export-progress-label").textContent = `${value}%`;
+      if (label !== undefined) document.querySelector("#recording-status").textContent = label;
+    }
+    function finishExport(label) {
+      document.querySelector("#export-progress").hidden = true;
+      document.querySelector("#export-progress-fill").style.width = "0";
+      document.querySelector("#export-progress-label").textContent = "0%";
+      document.querySelector("#recording-status").textContent = label;
+    }
+    function updateSeedPath() {
+      const folder = document.querySelector("#seed-folder").value.trim() || "<folder>";
+      document.querySelector("#seed-path").textContent = `/home/robotis-ai/cyclo_lab/datasets/waypoint_seed/${folder}`;
+    }
+    function updatePlanPath() {
+      const entered = document.querySelector("#plan-filename").value.trim() || "<filename>";
+      const filename = entered.endsWith(".json") ? entered : `${entered}.json`;
+      document.querySelector("#plan-path").textContent = `Save to: /home/robotis-ai/cyclo_lab/.runtime/joint_waypoint_seed_ui/plans/${filename}`;
+    }
+    function objectPositionFields() {
+      return ["x", "y", "z"].map(axis => document.getElementById(`object-${axis}`));
+    }
+    function readObjectPosition() {
+      const fields = objectPositionFields();
+      if (fields.every(input => input.value.trim() === "")) return null;
+      if (fields.some(input => input.value.trim() === "" || !Number.isFinite(Number(input.value)))) {
+        throw new Error("Enter numeric Object X, Y, and Z values.");
+      }
+      return fields.map(input => Number(input.value));
+    }
+    function showObjectPosition(xyz) {
+      if (!Array.isArray(xyz) || xyz.length !== 3) return;
+      objectPositionFields().forEach((input, index) => { input.value = Number(xyz[index]).toFixed(6); });
+    }
+    function appendJointFields(container, data = {}, placeholder = "Hold") {
+      for (const [label, pattern] of groups) {
+        const section = document.createElement("details");
+        section.className = "group";
+        const heading = document.createElement("summary");
+        heading.textContent = label;
+        const grid = document.createElement("div");
+        grid.className = "joint-grid";
+        const names = catalog.joints.filter(value => pattern.test(value));
+        section.open = names.some(name => data.q_des && name in data.q_des);
+        for (const name of names) {
+          const field = document.createElement("label");
+          field.textContent = name + (name === "lift_joint" ? " (m)" : " (rad)");
+          const input = document.createElement("input");
+          input.type = "number";
+          input.step = "any";
+          input.placeholder = placeholder;
+          input.dataset.joint = name;
+          input.min = catalog.limits[name][0];
+          input.max = catalog.limits[name][1];
+          if (data.q_des && name in data.q_des) input.value = data.q_des[name];
+          const range = document.createElement("small");
+          range.className = "range";
+          range.textContent = `${input.min} ~ ${input.max} ${name === "lift_joint" ? "m" : "rad"}`;
+          field.append(input, range);
+          grid.append(field);
+        }
+        section.append(heading, grid);
+        container.append(section);
+      }
+    }
+    function renderInitialJoints(values) {
+      for (const output of document.querySelectorAll("[data-initial-joint]")) {
+        const name = output.dataset.initialJoint;
+        const value = values?.[name];
+        output.textContent = Number.isFinite(value)
+          ? `${Number(value).toFixed(4)} ${name === "lift_joint" ? "m" : "rad"}` : "—";
+      }
+    }
+    function buildInitialJoints() {
+      const container = document.querySelector("#initial-joints");
+      for (const [label, pattern] of groups) {
+        const section = document.createElement("details");
+        section.className = "group";
+        const title = document.createElement("summary");
+        title.textContent = label;
+        const grid = document.createElement("div");
+        grid.className = "joint-grid";
+        for (const name of catalog.joints.filter(value => pattern.test(value))) {
+          const field = document.createElement("label");
+          field.textContent = name + (name === "lift_joint" ? " (m)" : " (rad)");
+          const value = document.createElement("span");
+          value.className = "initial-value joint-value";
+          value.dataset.initialJoint = name;
+          value.textContent = "—";
+          field.append(value);
+          grid.append(field);
+        }
+        section.append(title, grid);
+        container.append(section);
+      }
+    }
+    function setPointOpen(card, open) {
+      card.classList.toggle("open", open);
+      card.querySelector(".point-body").hidden = !open;
+      card.querySelector(".point-toggle").setAttribute("aria-expanded", String(open));
+    }
+    function updatePointSummary(card) {
+      const duration = card.querySelector(".duration").value || "—";
+      card.querySelector(".point-summary").textContent = card.querySelector(".point-enabled").checked ? `${duration}s` : "Skipped";
+      card.classList.toggle("disabled-point", !card.querySelector(".point-enabled").checked);
+      updatePointSpeeds();
+    }
+    function updatePointSpeeds(initial = latestState?.environment === document.querySelector("#environment").value
+      ? latestState.initial_joint_pos : null) {
+      let previous = initial && catalog.joints.every(name => Number.isFinite(Number(initial[name]))) ? {...initial} : null;
+      const rate = Number(document.querySelector("#rate").value);
+      for (const card of points.children) {
+        const output = card.querySelector(".point-speed");
+        if (!card.querySelector(".point-enabled").checked) {
+          output.textContent = "Skipped";
+          continue;
+        }
+        const duration = Number(card.querySelector(".duration").value);
+        if (!previous) {
+          output.textContent = "Connect env to calculate joint speed";
+          continue;
+        }
+        if (!(duration > 0) || !(rate > 0)) {
+          output.textContent = "Enter a valid duration and control rate";
+          continue;
+        }
+        const actualSeconds = Math.max(1, Math.round(duration * rate)) / rate;
+        const target = {...previous};
+        for (const input of card.querySelectorAll("[data-joint]")) {
+          if (input.value.trim() !== "" && Number.isFinite(Number(input.value))) {
+            target[input.dataset.joint] = Number(input.value);
+          }
+        }
+        let joint = "";
+        let travel = 0;
+        for (const name of catalog.joints) {
+          if (name === "lift_joint") continue;
+          const distance = Math.abs(Number(target[name]) - Number(previous[name]));
+          if (distance > travel) { travel = distance; joint = name; }
+        }
+        const angular = `Max avg joint: ${travel.toFixed(3)} rad / ${actualSeconds.toFixed(3)} s = ${(travel / actualSeconds).toFixed(3)} rad/s${joint ? ` (${joint})` : " · Hold"}`;
+        const lift = Math.abs(Number(target.lift_joint) - Number(previous.lift_joint));
+        output.textContent = lift > 0
+          ? `${angular} · Lift: ${(lift / actualSeconds).toFixed(3)} m/s`
+          : angular;
+        previous = target;
+      }
+    }
+    function addPoint(data = {}) {
+      for (const existing of points.children) setPointOpen(existing, false);
+      const card = document.createElement("section");
+      card.className = "point";
+      const header = document.createElement("header");
+      const enabled = document.createElement("input");
+      enabled.type = "checkbox";
+      enabled.className = "point-enabled";
+      enabled.checked = data.enabled !== false;
+      enabled.title = "Include in preview and export";
+      enabled.setAttribute("aria-label", "Include point in preview and export");
+      enabled.onchange = () => updatePointSummary(card);
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "point-toggle";
+      const title = document.createElement("span");
+      title.className = "point-title";
+      const summary = document.createElement("span");
+      summary.className = "point-summary";
+      toggle.append(title, summary);
+      toggle.onclick = () => setPointOpen(card, !card.classList.contains("open"));
+      const memo = document.createElement("input");
+      memo.type = "text";
+      memo.className = "point-memo";
+      memo.placeholder = "Memo (optional)";
+      memo.maxLength = 120;
+      memo.value = data.memo ?? "";
+      memo.setAttribute("aria-label", "Point memo");
+      const up = document.createElement("button");
+      up.type = "button"; up.className = "secondary move-point"; up.textContent = "↑"; up.title = "Move point up";
+      up.onclick = () => { if (card.previousElementSibling) { points.insertBefore(card, card.previousElementSibling); renumber(); } };
+      const down = document.createElement("button");
+      down.type = "button"; down.className = "secondary move-point"; down.textContent = "↓"; down.title = "Move point down";
+      down.onclick = () => { if (card.nextElementSibling) { points.insertBefore(card.nextElementSibling, card); renumber(); } };
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "delete";
+      remove.textContent = "Delete";
+      remove.onclick = () => { card.remove(); renumber(); };
+      header.append(enabled, toggle, memo, up, down, remove);
+      card.append(header);
+      const body = document.createElement("div");
+      body.className = "point-body";
+      body.id = `point-body-${++pointId}`;
+      toggle.setAttribute("aria-controls", body.id);
+      const duration = document.createElement("label");
+      duration.textContent = "Travel / hold duration (s)";
+      const durationInput = document.createElement("input");
+      durationInput.type = "number";
+      durationInput.min = "0.001";
+      durationInput.step = "0.1";
+      durationInput.value = data.duration_s ?? 1;
+      durationInput.className = "duration";
+      duration.append(durationInput);
+      const interpolation = document.createElement("label");
+      interpolation.textContent = "Interpolation";
+      const interpolationSelect = document.createElement("select");
+      interpolationSelect.className = "interpolation";
+      interpolationSelect.add(new Option("Linear", "linear"));
+      interpolationSelect.add(new Option("Smooth start / stop", "smoothstep"));
+      interpolationSelect.value = data.interpolation ?? "linear";
+      interpolation.append(interpolationSelect);
+      const timing = document.createElement("div");
+      timing.className = "point-timing";
+      const speed = document.createElement("output");
+      speed.className = "point-speed";
+      speed.title = "Commanded average speed from the previous enabled point (first point: measured initial pose). Smooth start / stop changes instantaneous speed.";
+      timing.append(duration, speed);
+      body.append(timing, interpolation);
+      appendJointFields(body, data);
+      card.append(body);
+      points.append(card);
+      durationInput.addEventListener("input", () => updatePointSummary(card));
+      for (const input of card.querySelectorAll("[data-joint]")) {
+        input.addEventListener("input", () => { input.classList.remove("invalid"); updatePointSummary(card); });
+        input.addEventListener("change", () => {
+          if (input.value.trim() !== "") {
+            input.value = Math.min(Number(input.max), Math.max(Number(input.min), Number(input.value)));
+          }
+          updatePointSummary(card);
+        });
+      }
+      updatePointSummary(card);
+      setPointOpen(card, true);
+      renumber();
+    }
+    function renumber() {
+      [...points.children].forEach((card, index) => {
+        card.querySelector(".point-title").textContent = `Point ${index + 1}`;
+        card.querySelector(".point-memo").setAttribute("aria-label", `Point ${index + 1} memo`);
+        card.querySelector(".point-enabled").setAttribute("aria-label", `Include Point ${index + 1} in preview and export`);
+      });
+      updatePointSpeeds();
+    }
+    function validateJointInputs() {
+      for (const input of points.querySelectorAll("[data-joint]")) {
+        if (input.value.trim() === "") continue;
+        const value = Number(input.value);
+        if (!Number.isFinite(value) || value < Number(input.min) || value > Number(input.max)) {
+          const card = input.closest(".point");
+          setPointOpen(card, true);
+          input.closest("details")?.setAttribute("open", "");
+          input.classList.add("invalid");
+          input.focus();
+          throw new Error(`${input.dataset.joint} is outside the SG2 URDF range ${input.min} to ${input.max}.`);
+        }
+      }
+    }
+    function collect() {
+      return {
+        environment: document.querySelector("#environment").value,
+        control_hz: Number(document.querySelector("#rate").value),
+        object_position_xyz_m: readObjectPosition(),
+        preview: "head",
+        waypoints: [...points.children].map(card => {
+          const q_des = {};
+          for (const input of card.querySelectorAll("[data-joint]")) {
+            if (input.value.trim() !== "") q_des[input.dataset.joint] = Number(input.value);
+          }
+          return {duration_s: Number(card.querySelector(".duration").value), memo: card.querySelector(".point-memo").value.trim(), enabled: card.querySelector(".point-enabled").checked, interpolation: card.querySelector(".interpolation").value, q_des};
+        })
+      };
+    }
+    function updateRateWarning(state = latestState) {
+      const output = document.querySelector("#rate-warning");
+      const rate = Number(document.querySelector("#rate").value);
+      const physicsHz = 120;
+      const decimation = Math.round(physicsHz / rate);
+      const supported = Number.isFinite(rate) && rate > 0 && rate <= physicsHz
+        && decimation >= 1 && Math.abs(physicsHz / rate - decimation) < 1e-9;
+      const runningHz = Number(state?.sim_control_hz);
+      const recordingMismatch = Boolean(state?.recording_mode) && Number.isFinite(runningHz)
+        && Math.abs(runningHz - rate) > 1e-6;
+      output.classList.toggle("error", !supported || recordingMismatch);
+      if (!supported) {
+        output.textContent = `${rate || "This value"} Hz cannot be applied with 120 Hz physics.`;
+        return false;
+      }
+      if (recordingMismatch) {
+        output.textContent = `Warning: requested ${rate} Hz, applied ${runningHz.toFixed(1)} Hz.`;
+        return false;
+      }
+      output.textContent = Number.isFinite(runningHz) && Math.abs(runningHz - rate) > 1e-6
+        ? `Current preview ${runningHz.toFixed(1)} Hz · export restarts at ${rate} Hz / decimation ${decimation}`
+        : `${rate} Hz available · physics 120 Hz / decimation ${decimation}`;
+      return true;
+    }
+    async function refreshPlans(selectName = "") {
+      const response = await fetch("/api/plans");
+      if (!response.ok) throw new Error("Could not load saved waypoints.");
+      const result = await response.json();
+      const select = document.querySelector("#saved-plans");
+      const preferred = selectName || select.value;
+      select.replaceChildren(new Option("Select saved waypoints", ""));
+      for (const name of result.plans) select.add(new Option(name, name));
+      if (result.plans.includes(preferred)) select.value = preferred;
+    }
+    async function refreshSeeds(selectPath = "") {
+      const response = await fetch("/api/seeds");
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not load saved seeds.");
+      const select = document.querySelector("#saved-seeds");
+      const preferred = selectPath || select.value;
+      select.replaceChildren(new Option("Select a saved seed", ""));
+      for (const seed of result.seeds) {
+        const megabytes = (seed.size_bytes / 1048576).toFixed(1);
+        const rate = Number.isFinite(Number(seed.control_hz)) ? ` · ${Number(seed.control_hz)} Hz` : "";
+        const option = new Option(`${seed.relative}${rate} · ${megabytes} MB`, seed.relative);
+        option.dataset.videoUrl = seed.video_url || "";
+        select.add(option);
+      }
+      if (result.seeds.some(seed => seed.relative === preferred)) select.value = preferred;
+      document.querySelector("#viewer-status").textContent = result.seeds.length
+        ? `${result.seeds.length} saved seed(s). Select one and click View.`
+        : "No saved HDF5 seeds.";
+    }
+    function loadPlan(plan) {
+      if (!catalog.environments.includes(plan.environment)) throw new Error("This plan's environment is not available.");
+      document.querySelector("#environment").value = plan.environment;
+      document.querySelector("#rate").value = plan.control_hz;
+      objectPositionFields().forEach(input => { input.value = ""; });
+      if (plan.object_position_xyz_m) showObjectPosition(plan.object_position_xyz_m);
+      objectPositionDirty = Boolean(plan.object_position_xyz_m);
+      points.replaceChildren();
+      for (const waypoint of plan.waypoints) addPoint(waypoint);
+      updateRateWarning();
+      refreshState();
+    }
+    function xyz(value) {
+      return Array.isArray(value) && value.length === 3 ? value.map(number => Number(number).toFixed(3)).join("   ") : "—";
+    }
+    async function refreshState() {
+      try {
+        const response = await fetch("/api/state");
+        const state = await response.json();
+        latestState = state;
+        const selected = document.querySelector("#environment").value;
+        const live = ["running", "awaiting_acceptance"].includes(state.status) && state.environment === selected;
+        const starting = state.status === "starting" && state.environment === selected;
+        const active = ["running", "awaiting_acceptance", "starting"].includes(state.status);
+        const failedHere = state.status === "failed" && state.environment === selected;
+        const failureReason = /out of memory/i.test(state.error || "")
+          ? "GPU out of memory" : (state.error || "Isaac Sim runner failed").split("\n")[0].slice(0, 160);
+        document.querySelector("#connect-env").disabled = active;
+        document.querySelector("#disconnect-env").disabled = !active;
+        document.querySelector("#environment").disabled = active;
+        document.querySelector("#connection-status").textContent = starting
+          ? `${selected} · Connecting…` : live ? `${selected} · Connected` : active
+            ? `${state.environment} · Connected to another env` : state.status === "stale" && state.environment === selected
+            ? `${selected} · Runner response delayed` : failedHere
+            ? `${selected} · Isaac Sim failed` : "Not connected";
+        const initialValues = state.environment === selected && ["running", "awaiting_acceptance", "saved", "stale", "disconnected"].includes(state.status)
+          ? state.initial_joint_pos : null;
+        renderInitialJoints(initialValues);
+        updatePointSpeeds(initialValues);
+        const badge = document.querySelector("#runtime-badge");
+        badge.classList.toggle("live", live);
+        badge.textContent = starting ? "Connecting" : state.status === "awaiting_acceptance" && live
+          ? "Awaiting Approval" : live && state.phase === "final_hold" ? "Final Pose Hold" : live ? "Preview Running" : "Preview Idle";
+        document.querySelector("#pose-status").textContent = live
+          ? `${state.environment} · ${state.phase || "running"} · step ${state.step} · measured`
+          : starting ? `Starting ${state.environment}…`
+          : failedHere ? `Isaac Sim stopped · ${failureReason}.`
+          : state.status === "running" ? `Another environment is running: ${state.environment}` : "Waiting for the selected Isaac environment.";
+        document.querySelector("#left-tcp").textContent = live ? xyz(state.tcp_xyz_m?.left) : "—";
+        document.querySelector("#right-tcp").textContent = live ? xyz(state.tcp_xyz_m?.right) : "—";
+        document.querySelector("#object-label").textContent = live && state.object_name ? `${state.object_name.toUpperCase()} CENTER:` : "OBJECT CENTER:";
+        document.querySelector("#object-center").textContent = live ? xyz(state.object_root_xyz_m) : "—";
+        if (live && !objectPositionDirty && Array.isArray(state.object_root_xyz_m)) {
+          showObjectPosition(state.object_root_xyz_m);
+          objectPositionDirty = true;
+        }
+        document.querySelector("#tray-center").textContent = live ? xyz(state.tray_center_xyz_m) : "—";
+        const canAccept = state.status === "awaiting_acceptance" && state.environment === selected;
+        const recording = live && Boolean(state.recording_mode);
+        const finalizing = state.status === "finalizing" && state.environment === selected;
+        const exportButton = document.querySelector("#accept-hdf5");
+        exportButton.disabled = exportStarting || starting || finalizing || (recording && !canAccept);
+        exportButton.textContent = canAccept ? "Approve" : finalizing ? "Finalizing…" : recording ? "Recording…" : "Export";
+        document.querySelector("#seed-folder").disabled = exportStarting || recording || finalizing;
+        if (canAccept) {
+          setExportProgress(95, "Waiting for approval");
+        } else if (recording) {
+          const rate = Number(document.querySelector("#rate").value);
+          const initialPoseHoldSteps = Math.max(1, Math.round(0.2 * rate));
+          const totalSteps = initialPoseHoldSteps + [...points.children]
+            .filter(card => card.querySelector(".point-enabled").checked)
+            .reduce((sum, card) => sum + Math.max(1, Math.round(Number(card.querySelector(".duration").value) * rate)), 0);
+          const motion = totalSteps ? Math.min(1, Number(state.step || 0) / totalSteps) : 0;
+          setExportProgress(45 + motion * 50, `Recording · ${state.step || 0} / ${totalSteps} steps · ${Number(state.sim_control_hz).toFixed(1)} Hz`);
+        } else if (finalizing) {
+          setExportProgress(98, "Finalizing HDF5…");
+        } else if (state.status === "saved" && state.environment === selected) {
+          finishExport(`Saved · ${state.dataset_file}`);
+        } else if (state.status === "failed" && state.environment === selected) {
+          setExportProgress(0, `Export failed · ${state.error || "runner error"}`);
+        } else if (!exportStarting) {
+          document.querySelector("#recording-status").textContent = "";
+        }
+        if (state.status === "saved" && state.dataset_file && state.dataset_file !== lastSavedDataset) {
+          lastSavedDataset = state.dataset_file;
+          refreshSeeds().catch(() => {});
+        }
+        updateRateWarning(state);
+        for (const label of ["overhead_left", "overhead_center", "overhead_right", "wrist_left", "head", "wrist_right"]) {
+          const img = document.getElementById(`camera-${label}`);
+          const empty = document.getElementById(`camera-${label}-empty`);
+          const available = live && state.cameras?.includes(label);
+          if (available) {
+            const url = `/api/camera/${label}.jpg?frame=${state.camera_frame_step}`;
+            if (img.getAttribute("src") !== url) img.src = url;
+            img.hidden = false;
+            empty.hidden = true;
+          } else {
+            img.hidden = true;
+            img.removeAttribute("src");
+            empty.hidden = false;
+          }
+        }
+      } catch (_) {
+        document.querySelector("#pose-status").textContent = "Position status unavailable.";
+        document.querySelector("#runtime-badge").classList.remove("live");
+        document.querySelector("#runtime-badge").textContent = "Preview Unavailable";
+        document.querySelector("#connection-status").textContent = "Connection unavailable";
+      }
+    }
+    document.querySelector("#connect-env").onclick = async () => {
+      const button = document.querySelector("#connect-env");
+      button.disabled = true;
+      try {
+        const environment = document.querySelector("#environment").value;
+        const control_hz = Number(document.querySelector("#rate").value);
+        const response = await fetch("/api/runner/connect", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({environment, control_hz, object_position_xyz_m: readObjectPosition()})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        message(result.status === "already_connected" ? "Selected environment is already connected." : "Starting the selected environment headless.");
+        await refreshState();
+      } catch (error) { message(error.message, true); }
+      finally { if (latestState?.status !== "starting") button.disabled = false; }
+    };
+    document.querySelector("#disconnect-env").onclick = async () => {
+      const button = document.querySelector("#disconnect-env");
+      button.disabled = true;
+      try {
+        const environment = ["running", "awaiting_acceptance", "starting"].includes(latestState?.status)
+          ? latestState.environment : document.querySelector("#environment").value;
+        const response = await fetch("/api/runner/disconnect", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({environment})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        message(result.status === "disconnected" ? "No environment is connected." : "Disconnect requested.");
+      } catch (error) { message(error.message, true); }
+      finally { await refreshState(); }
+    };
+    document.querySelector("#environment").onchange = () => {
+      latestIkResult = null;
+      objectPositionDirty = false;
+      objectPositionFields().forEach(input => { input.value = ""; });
+      document.querySelector("#ik-add").disabled = true;
+      refreshState();
+    };
+    document.querySelector("#ik-solver").onchange = () => {
+      const solver = document.querySelector("#ik-solver").value;
+      latestIkResult = null;
+      document.querySelector("#ik-add").disabled = true;
+      document.querySelector("#ik-status").textContent = "";
+      document.querySelector("#ik-result").textContent = "";
+      document.querySelector("#ik-description").textContent = ikDescriptions[solver] || "";
+    };
+    for (const input of objectPositionFields()) {
+      input.addEventListener("input", () => { objectPositionDirty = true; });
+    }
+    document.querySelector("#object-current").onclick = () => {
+      const selected = document.querySelector("#environment").value;
+      const xyz = latestState?.environment === selected ? latestState.object_root_xyz_m : null;
+      if (!Array.isArray(xyz)) {
+        document.querySelector("#object-status").textContent = "No measured object position is available.";
+        return;
+      }
+      showObjectPosition(xyz);
+      objectPositionDirty = true;
+      document.querySelector("#object-status").textContent = "Current position copied.";
+    };
+    async function applyObjectPosition() {
+        const environment = document.querySelector("#environment").value;
+        const xyz_m = readObjectPosition();
+        if (!xyz_m) throw new Error("Enter Object X, Y, and Z values.");
+        const response = await fetch("/api/object-requests", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({environment, xyz_m})
+        });
+        const submitted = await response.json();
+        if (!response.ok) throw new Error(submitted.error);
+        let result;
+        for (let attempt = 0; attempt < 60; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          const polled = await fetch(`/api/object-result?id=${encodeURIComponent(submitted.id)}`);
+          result = await polled.json();
+          if (polled.status === 200) break;
+        }
+        if (result?.id !== submitted.id) throw new Error("Object position update timed out.");
+        if (result.status !== "ok") throw new Error(result.error || "Object position update failed.");
+        return xyz_m;
+    }
+    document.querySelector("#object-apply").onclick = async () => {
+      const button = document.querySelector("#object-apply");
+      const output = document.querySelector("#object-status");
+      button.disabled = true;
+      try {
+        output.textContent = "Applying…";
+        await applyObjectPosition();
+        output.textContent = "Applied.";
+      } catch (error) { output.textContent = error.message; }
+      finally { button.disabled = false; }
+    };
+    document.querySelector("#rate").addEventListener("input", () => { updateRateWarning(); updatePointSpeeds(); });
+    document.querySelector("#seed-folder").addEventListener("input", updateSeedPath);
+    document.querySelector("#plan-filename").addEventListener("input", updatePlanPath);
+    document.querySelector("#ik-current").onclick = () => {
+      const side = document.querySelector("#ik-side").value;
+      const selected = document.querySelector("#environment").value;
+      const value = latestState?.status === "running" && latestState.environment === selected
+        ? latestState.tcp_xyz_m?.[side] : null;
+      if (!value) { document.querySelector("#ik-status").textContent = "No measured TCP is available for the selected environment."; return; }
+      ["x", "y", "z"].forEach((axis, index) => document.getElementById(`ik-${axis}`).value = value[index]);
+    };
+    document.querySelector("#ik-solve").onclick = async () => {
+      const ikStatus = document.querySelector("#ik-status");
+      const solve = document.querySelector("#ik-solve");
+      latestIkResult = null;
+      document.querySelector("#ik-add").disabled = true;
+      document.querySelector("#ik-result").textContent = "";
+      const fields = ["x", "y", "z"].map(axis => document.getElementById(`ik-${axis}`));
+      if (fields.some(input => input.value.trim() === "" || !Number.isFinite(Number(input.value)))) {
+        ikStatus.textContent = "Enter numeric X, Y, and Z values.";
+        return;
+      }
+      solve.disabled = true;
+      try {
+        const environment = document.querySelector("#environment").value;
+        const side = document.querySelector("#ik-side").value;
+        const solver = document.querySelector("#ik-solver").value;
+        const xyz_m = fields.map(input => Number(input.value));
+        const response = await fetch("/api/ik-requests", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({environment, side, xyz_m, solver})
+        });
+        const submitted = await response.json();
+        if (!response.ok) throw new Error(submitted.error);
+        ikStatus.textContent = "Calculating IK in the current environment…";
+        let result;
+        for (let attempt = 0; attempt < 60; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          const polled = await fetch(`/api/ik-result?id=${encodeURIComponent(submitted.id)}`);
+          result = await polled.json();
+          if (polled.status === 200) break;
+        }
+        if (result?.id !== submitted.id) throw new Error("IK timed out. Check that the runner is active.");
+        if (result.status !== "ok") throw new Error(result.error || "IK calculation failed.");
+        if (document.querySelector("#environment").value !== environment) throw new Error("The selected environment changed during IK.");
+        if (document.querySelector("#ik-solver").value !== solver) throw new Error("The selected IK method changed during calculation.");
+        latestIkResult = {...result, environment, solver};
+        const orientation = Number.isFinite(result.orientation_residual_rad)
+          ? ` · orientation residual ${(result.orientation_residual_rad * 180 / Math.PI).toFixed(2)} deg` : "";
+        const scale = result.joint_step_scale < 0.999 ? ` · URDF limit scale ${result.joint_step_scale.toFixed(3)}` : "";
+        const limit = result.urdf_limited ? " · limit active" : "";
+        ikStatus.textContent = `${result.solver_label} · ${side} arm · distance ${result.distance_m.toFixed(3)} m · position residual ${result.position_residual_m.toFixed(4)} m${orientation} · ${result.iterations} iteration(s)${scale}${limit}`;
+        document.querySelector("#ik-result").textContent = Object.entries(result.q_des)
+          .map(([name, value]) => `${name}: ${value.toFixed(6)} rad`).join("\n")
+          + `\n\nmax joint delta: ${result.max_joint_delta_rad.toFixed(4)} rad`
+          + `\nmin joint-limit margin: ${result.min_joint_limit_margin_rad.toFixed(4)} rad`
+          + `\n${result.note}`;
+        document.querySelector("#ik-add").disabled = false;
+      } catch (error) { ikStatus.textContent = error.message; }
+      finally { solve.disabled = false; }
+    };
+    document.querySelector("#ik-add").onclick = () => {
+      if (!latestIkResult || latestIkResult.environment !== document.querySelector("#environment").value) return;
+      addPoint({duration_s: 1, q_des: latestIkResult.q_des});
+      message(`Added the ${latestIkResult.solver_label} 7-joint candidate as a new point.`);
+    };
+    document.querySelector("#add").onclick = () => addPoint();
+    document.querySelector("#reset-init").onclick = async () => {
+      const button = document.querySelector("#reset-init");
+      button.disabled = true;
+      try {
+        const environment = document.querySelector("#environment").value;
+        if (readObjectPosition()) await applyObjectPosition();
+        const response = await fetch("/api/reset-requests", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({environment})
+        });
+        const submitted = await response.json();
+        if (!response.ok) throw new Error(submitted.error);
+        message("Resetting the environment and measuring the initial pose.");
+        let result;
+        for (let attempt = 0; attempt < 120; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          const polled = await fetch(`/api/reset-result?id=${encodeURIComponent(submitted.id)}`);
+          result = await polled.json();
+          if (polled.status === 200) break;
+        }
+        if (result?.id !== submitted.id) throw new Error("Reset timed out.");
+        if (result.status !== "ok") throw new Error(result.error || "Reset failed.");
+        message("Reset complete. Holding the initial pose.");
+      } catch (error) { message(error.message, true); }
+      finally { button.disabled = false; }
+    };
+    document.querySelector("#preview-motion").onclick = async () => {
+      const button = document.querySelector("#preview-motion");
+      button.disabled = true;
+      try {
+        validateJointInputs();
+        const submittedPlan = collect();
+        const response = await fetch("/api/preview-requests", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(submittedPlan)
+        });
+        const submitted = await response.json();
+        if (!response.ok) throw new Error(submitted.error);
+        message(`Environment reset complete. Playing ${submitted.steps} steps.`);
+        const maxPolls = Math.max(120, Math.ceil((submitted.duration_s + 30) * 4));
+        let result;
+        for (let attempt = 0; attempt < maxPolls; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 250));
+          const polled = await fetch(`/api/preview-result?id=${encodeURIComponent(submitted.id)}`);
+          result = await polled.json();
+          if (polled.status === 200) break;
+        }
+        if (result?.id !== submitted.id) throw new Error("Preview timed out. Check the runner status.");
+        if (result.status !== "ok") throw new Error(result.error || "Preview failed.");
+        const wallHz = result.wall_time_s > 0 ? result.steps / result.wall_time_s : 0;
+        message(`Preview complete · initial pose → ${submittedPlan.waypoints.filter(point => point.enabled).length} point(s) · ${result.steps} steps · sim ${result.sim_control_hz.toFixed(1)} Hz (physics ${result.physics_hz.toFixed(1)} / decimation ${result.decimation}) · wall ${result.wall_time_s.toFixed(3)}s (${wallHz.toFixed(1)} step/s) · holding final pose`);
+      } catch (error) { message(error.message, true); }
+      finally { button.disabled = false; }
+    };
+    document.querySelector("#refresh-plans").onclick = async () => {
+      try { await refreshPlans(); message("Saved waypoints refreshed."); }
+      catch (error) { message(error.message, true); }
+    };
+    document.querySelector("#load-plan").onclick = async () => {
+      try {
+        const name = document.querySelector("#saved-plans").value;
+        if (!name) throw new Error("Select saved waypoints to load.");
+        const response = await fetch(`/api/plans/${encodeURIComponent(name)}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        loadPlan(result.plan);
+        document.querySelector("#plan-filename").value = name.replace(/\.json$/i, "");
+        updatePlanPath();
+        message(`Loaded: ${name}`);
+      } catch (error) { message(error.message, true); }
+    };
+    document.querySelector("#accept-hdf5").onclick = async () => {
+      const button = document.querySelector("#accept-hdf5");
+      let exportError = null;
+      try {
+        const state = latestState;
+        if (state?.status === "awaiting_acceptance" && state.environment === document.querySelector("#environment").value) {
+          const response = await fetch("/api/recording/accept", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({run_id: state.run_id, environment: state.environment})});
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error);
+          button.disabled = true;
+          document.querySelector("#recording-status").textContent = "Approval sent · finalizing HDF5…";
+          return;
+        }
+        validateJointInputs();
+        if (!updateRateWarning()) throw new Error("Set a control rate with integer decimation from 120 Hz physics.");
+        const folderName = document.querySelector("#seed-folder").value.trim();
+        if (!folderName) throw new Error("Enter a Seed Export folder name.");
+        if (!/^[\p{L}\p{N}_-]+$/u.test(folderName)) throw new Error("Use letters, numbers, underscores, or hyphens for the folder name.");
+        exportStarting = true;
+        button.disabled = true;
+        status.textContent = "";
+        status.className = "";
+        setExportProgress(5, "Stopping preview…");
+        const response = await fetch("/api/recording/start", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({folder_name: folderName, plan: collect()})
+        });
+        const submitted = await response.json();
+        if (!response.ok) throw new Error(submitted.error);
+        setExportProgress(12, `Stopping preview · ${submitted.control_hz} Hz`);
+        let result;
+        for (let attempt = 0; attempt < 240; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const polled = await fetch(`/api/export-status?id=${encodeURIComponent(submitted.id)}`);
+          result = await polled.json();
+          if (polled.status === 200 && result.status === "error") throw new Error(result.error || "Seed Export failed to start.");
+          if (polled.status === 200 && result.status === "recording_started") break;
+          if (result.status === "stopping_preview") setExportProgress(15, "Stopping preview…");
+          if (result.status === "launching_recorder") setExportProgress(30, "Starting recorder…");
+          if (result.status === "loading_environment") setExportProgress(40, "Loading environment…");
+        }
+        if (result?.status !== "recording_started") throw new Error("Recorder startup timed out.");
+        setExportProgress(45, `Recording · ${result.control_hz} Hz`);
+      } catch (error) {
+        exportError = error.message;
+        setExportProgress(0, `Export failed · ${error.message}`);
+      } finally {
+        exportStarting = false;
+        await refreshState();
+        if (exportError) {
+          button.disabled = false;
+          document.querySelector("#seed-folder").disabled = false;
+          setExportProgress(0, `Export failed · ${exportError}`);
+        }
+      }
+    };
+    document.querySelector("#save").onclick = async () => {
+      try {
+        validateJointInputs();
+        const filename = document.querySelector("#plan-filename").value.trim();
+        if (!filename) throw new Error("Enter a Save Waypoints filename.");
+        if (!/^[\p{L}\p{N}_-]+(?:\.json)?$/u.test(filename)) throw new Error("Use letters, numbers, underscores, or hyphens for the filename.");
+        const response = await fetch("/api/plans", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({filename, plan: collect()})});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        const name = result.saved_path.split("/").pop();
+        await refreshPlans(name);
+        message(`Saved: ${result.saved_path}\n${result.steps} steps / ${result.duration_s.toFixed(3)}s`);
+      } catch (error) { message(error.message, true); }
+    };
+    document.querySelector("#refresh-seeds").onclick = async () => {
+      viewerGeneration += 1;
+      document.querySelector("#view-seed").disabled = false;
+      const video = document.querySelector("#seed-video");
+      video.pause();
+      video.hidden = true;
+      video.removeAttribute("src");
+      video.load();
+      try { await refreshSeeds(); }
+      catch (error) { document.querySelector("#viewer-status").textContent = error.message; }
+    };
+    document.querySelector("#view-seed").onclick = async () => {
+      const generation = ++viewerGeneration;
+      const button = document.querySelector("#view-seed");
+      const viewerStatus = document.querySelector("#viewer-status");
+      const video = document.querySelector("#seed-video");
+      button.disabled = true;
+      try {
+        const path = document.querySelector("#saved-seeds").value;
+        if (!path) throw new Error("Select a seed to view.");
+        video.pause();
+        video.hidden = true;
+        video.removeAttribute("src");
+        viewerStatus.textContent = "Rendering saved camera frames…";
+        const response = await fetch("/api/seeds/render", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({path})
+        });
+        let result = await response.json();
+        if (generation !== viewerGeneration) return;
+        if (!response.ok) throw new Error(result.error);
+        if (response.status === 202) {
+          if (!result.id) throw new Error("Render job did not return an ID. Click View again.");
+          for (let attempt = 0; attempt < 1200; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            if (generation !== viewerGeneration) return;
+            const polled = await fetch(`/api/render-status?id=${encodeURIComponent(result.id)}`);
+            result = await polled.json();
+            if (generation !== viewerGeneration) return;
+            if (polled.status === 200 && ["ready", "error"].includes(result.status)) break;
+          }
+        }
+        if (result.status === "error") throw new Error(result.error || "Seed video rendering failed.");
+        if (result.status !== "ready") throw new Error("Seed video rendering timed out.");
+        if (generation !== viewerGeneration) return;
+        video.src = `${result.video_url}&v=${Date.now()}`;
+        video.hidden = false;
+        viewerStatus.textContent = `${path} · Head / Left wrist / Right wrist`;
+        await video.play().catch(() => {});
+        await refreshSeeds(path);
+      } catch (error) { if (generation === viewerGeneration) viewerStatus.textContent = error.message; }
+      finally { if (generation === viewerGeneration) button.disabled = false; }
+    };
+    (async () => {
+      try {
+        const response = await fetch("/api/catalog");
+        if (!response.ok) throw new Error("Could not load the environment catalog.");
+        catalog = await response.json();
+        const select = document.querySelector("#environment");
+        for (const name of catalog.environments) {
+          const option = document.createElement("option");
+          option.value = option.textContent = name;
+          select.append(option);
+        }
+        select.value = catalog.environments.find(name => name === "Cyclo-Real-WhiteRoom-Task000300-FFW-SG2-v0") || catalog.environments[0] || "";
+        buildInitialJoints();
+        addPoint();
+        await refreshPlans();
+        await refreshSeeds();
+        updateRateWarning();
+        updateSeedPath();
+        message(`Loaded ${catalog.environments.length} environments.`);
+        refreshState();
+        setInterval(refreshState, 250);
+      } catch (error) { message(error.message, true); }
+    })();
+  </script>
+</body>
+</html>
